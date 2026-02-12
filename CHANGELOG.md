@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.11.3 - 2026-02-12
+
+- Added generated `title` for each job:
+  - saved to `transcript.json` as `meta.title`
+  - stored in transcription SQLite history
+- Implemented title generation strategy:
+  - source: summary text when available, otherwise first part of transcript
+  - Ollama-first (`4-8` words), local fallback heuristic when Ollama is unavailable
+- Added title prompt template: `prompts/title_ru.txt`.
+- Updated transcription history UI to show title as main text.
+- Updated ZIP export file naming:
+  - `safe_slug(title) + timestamp + .zip`
+  - ZIP still contains `note.md` + `transcript.txt`
+- Added delete action in transcription archive UI (`🗑`):
+  - removes item from SQLite history
+  - removes corresponding files from `output/...`
+  - clears indexed chunks/meta for the deleted job
+
+## 0.11.2 - 2026-02-12
+
+- Added transcription history in Web UI (`🗂 История транскрибации`).
+- Added persistent storage for transcription history in local SQLite (`transcription_history`).
+- Added backend endpoint:
+  - `GET /api/transcription/history`
+- Added ZIP export endpoint for transcription history item:
+  - `GET /api/transcription/history/{job_id}/zip`
+  - archive contains `note.md` + `transcript.txt`
+
 ## 0.11.1 - 2026-02-12
 
 - Dictation UX update:

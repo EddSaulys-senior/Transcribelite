@@ -2,11 +2,14 @@
 
 import asyncio
 import difflib
+import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import uuid
+import zipfile
 from urllib.parse import urlparse
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -14,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from transcribelite.config import load_config
 from transcribelite.pipeline.export import export_outputs
@@ -23,10 +26,15 @@ from transcribelite.pipeline.summarize_ollama import list_ollama_models
 from transcribelite.pipeline.summarize_ollama import summarize_text
 from transcribelite.search_index import add_dictation_history
 from transcribelite.search_index import add_qa_history
+from transcribelite.search_index import add_transcription_history
+from transcribelite.search_index import delete_index_for_job
 from transcribelite.search_index import index_job as index_transcript_job
 from transcribelite.search_index import delete_dictation_history_item
+from transcribelite.search_index import delete_transcription_history_item
+from transcribelite.search_index import get_transcription_history_item
 from transcribelite.search_index import list_dictation_history
 from transcribelite.search_index import list_qa_history
+from transcribelite.search_index import list_transcription_history
 from transcribelite.search_index import search_chunks
 from transcribelite.search_index import search_global_chunks
 
@@ -264,6 +272,40 @@ def _short_source_text(text: str, max_chars: int = 360) -> str:
     return cleaned[:max_chars].rstrip() + "..."
 
 
+def _safe_slug(value: str, max_len: int = 64) -> str:
+    slug = re.sub(r"[^\w\-]+", "_", str(value or ""), flags=re.UNICODE).strip("_")
+    slug = re.sub(r"_+", "_", slug)
+    if len(slug) > max_len:
+        slug = slug[:max_len].rstrip("_")
+    return slug or "transcription"
+
+
+def _build_transcription_zip(output_dir: Path) -> bytes:
+    note = output_dir / "note.md"
+    txt = output_dir / "transcript.txt"
+    if not note.exists() or not txt.exists():
+        raise FileNotFoundError("Required files are missing in output directory")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(note, arcname="note.md")
+        zf.write(txt, arcname="transcript.txt")
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _read_transcript_meta(out_dir: Path) -> dict:
+    path = out_dir / "transcript.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        meta = payload.get("meta", {})
+        return meta if isinstance(meta, dict) else {}
+    except Exception:
+        return {}
+
+
 def _to_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -398,8 +440,11 @@ def _index_completed_job(job_id: str, out_dir: Path) -> None:
         try:
             payload = json.loads(json_path.read_text(encoding="utf-8"))
             meta = payload.get("meta", {})
+            title_meta = str(meta.get("title", "")).strip()
+            if title_meta:
+                title = title_meta
             source_file = str(meta.get("source_file", "")).strip()
-            if source_file:
+            if source_file and not title_meta:
                 title = Path(source_file).name
             created = str(meta.get("created_at", "")).strip()
             if created:
@@ -900,6 +945,7 @@ def preview(job_id: str) -> JSONResponse:
         "meta": {
             "created_at": meta.get("created_at", ""),
             "source_file": meta.get("source_file", ""),
+            "title": meta.get("title", ""),
             "stt_model": meta.get("model_name", ""),
             "device": meta.get("device", ""),
             "compute_type": meta.get("compute_type", ""),
@@ -1020,6 +1066,76 @@ def get_dictation_history(limit: int = Query(50, ge=1, le=200)) -> JSONResponse:
         for item in history
     ]
     return JSONResponse({"items": items})
+
+
+@app.get("/api/transcription/history")
+def get_transcription_history(limit: int = Query(50, ge=1, le=300)) -> JSONResponse:
+    history = list_transcription_history(INDEX_DB_PATH, limit=limit)
+    items = [
+        {
+            "id": item.id,
+            "job_id": item.job_id,
+            "source_name": item.source_name,
+            "title": item.title,
+            "output_dir": item.output_dir,
+            "created_at": item.created_at,
+        }
+        for item in history
+    ]
+    return JSONResponse({"items": items})
+
+
+@app.get("/api/transcription/history/{job_id}/zip")
+def download_transcription_zip(job_id: str):
+    history = list_transcription_history(INDEX_DB_PATH, limit=300)
+    hit = next((x for x in history if x.job_id == job_id), None)
+    if hit is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    out_dir = Path(hit.output_dir)
+    try:
+        payload = _build_transcription_zip(out_dir)
+    except FileNotFoundError:
+        return JSONResponse({"error": "note.md or transcript.txt not found"}, status_code=404)
+
+    meta = _read_transcript_meta(out_dir)
+    title = str(meta.get("title") or hit.title or hit.source_name or "transcription").strip()
+    ts_raw = str(meta.get("created_at") or hit.created_at or "").strip()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if ts_raw:
+        ts = re.sub(r"[^0-9]", "", ts_raw)[:14] or ts
+    filename = f"{_safe_slug(title)}_{ts}.zip"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(io.BytesIO(payload), media_type="application/zip", headers=headers)
+
+
+@app.delete("/api/transcription/history/{item_id}")
+def delete_transcription_history(item_id: int) -> JSONResponse:
+    item = get_transcription_history_item(INDEX_DB_PATH, int(item_id))
+    if item is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    out_dir = Path(item.output_dir)
+    try:
+        out_resolved = out_dir.resolve()
+        base_resolved = OUTPUT_DIR.resolve()
+        if out_resolved != base_resolved and base_resolved in out_resolved.parents:
+            shutil.rmtree(out_resolved, ignore_errors=False)
+        elif out_resolved.exists():
+            return JSONResponse({"error": "refuse to delete outside output dir"}, status_code=400)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        return JSONResponse({"error": f"failed to delete files: {exc}"}, status_code=500)
+
+    try:
+        delete_index_for_job(INDEX_DB_PATH, item.job_id)
+    except Exception:
+        pass
+    deleted = delete_transcription_history_item(INDEX_DB_PATH, int(item_id))
+    if not deleted:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"deleted": True, "id": int(item_id), "job_id": item.job_id})
 
 
 @app.delete("/api/dictation/history/{item_id}")
@@ -1394,6 +1510,21 @@ async def run_transcribe_job(job_id: str, input_path: Path) -> None:
             out_dir = Path(job.output_dir)
             try:
                 await asyncio.to_thread(_index_completed_job, job_id, out_dir)
+            except Exception:
+                pass
+            try:
+                created_at = datetime.now().isoformat(timespec="seconds")
+                meta = _read_transcript_meta(out_dir)
+                title = str(meta.get("title") or Path(job.filename).stem).strip()
+                await asyncio.to_thread(
+                    add_transcription_history,
+                    INDEX_DB_PATH,
+                    job_id,
+                    Path(job.filename).name,
+                    title,
+                    str(out_dir),
+                    created_at,
+                )
             except Exception:
                 pass
 

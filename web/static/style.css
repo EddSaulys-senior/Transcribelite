@@ -498,6 +498,14 @@ h3 {
   resize: vertical;
   font-family: "Manrope", "Segoe UI", sans-serif;
   line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg-soft);
+  caret-color: var(--ink);
+  border: 1px solid var(--border);
+}
+
+.dict-live-edit::placeholder {
+  color: var(--ink-soft);
 }
 
 .md-preview-tabs {
@@ -708,6 +716,13 @@ h3 {
 .history-del-btn {
   padding: 6px 10px;
   font-size: 12px;
+}
+
+.trans-history-del-btn {
+  min-width: 38px;
+  padding: 6px 8px;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .search-item {

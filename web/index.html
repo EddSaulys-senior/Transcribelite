@@ -20,7 +20,7 @@
       <div>
         <p class="kicker">LOCAL TRANSCRIPTION</p>
         <h1>TranscribeLite Web</h1>
-        <p class="subtitle">Загрузи аудио/видео или вставь ссылку из интернета. Следи за этапами в реальном времени и забирай результат в один клик.</p>
+        <!-- <p class="subtitle">Загрузи аудио/видео или вставь ссылку из интернета. Следи за этапами в реальном времени и забирай результат в один клик.</p> -->
       </div>
       <div class="hero-actions">
         <button id="themeToggle" class="btn btn-ghost theme-toggle" type="button" aria-label="Переключить тему">🌙 Тёмная тема</button>
@@ -127,6 +127,8 @@
       </div>
     </section>
 
+
+
     <section class="card ask-card collapsible-card">
       <details id="askPanel">
         <summary>🧠 Спроси у записи</summary>
@@ -168,6 +170,17 @@
         </div>
       </details>
     </section>
+
+    <section class="card search-card collapsible-card">
+      <details id="transcriptionHistoryPanel">
+        <summary>🗂 История транскрибации</summary>
+        <div class="collapsible-body">
+          <div class="hint">Экспорт: ZIP с `note.md` и `transcript.txt`.</div>
+          <div id="transcriptionHistory" class="preview-box rich-box"><p class="muted">История пока пуста</p></div>
+        </div>
+      </details>
+    </section>
+    
     </div>
 
     <div id="tabDictation" class="tab-pane">

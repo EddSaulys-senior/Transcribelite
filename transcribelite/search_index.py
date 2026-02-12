@@ -4,7 +4,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from transcribelite.utils.chunking import chunk_text_words
 
@@ -42,6 +42,16 @@ class DictationHistoryItem:
     job_id: str
     output_dir: str
     text_preview: str
+    created_at: str
+
+
+@dataclass
+class TranscriptionHistoryItem:
+    id: int
+    job_id: str
+    source_name: str
+    title: str
+    output_dir: str
     created_at: str
 
 
@@ -93,6 +103,22 @@ def open_db(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transcription_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            output_dir TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcription_history)").fetchall()}
+    if "title" not in cols:
+        conn.execute("ALTER TABLE transcription_history ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        conn.commit()
     return conn
 
 
@@ -337,3 +363,126 @@ def delete_dictation_history_item(db_path: Path, item_id: int) -> bool:
         cur = conn.execute("DELETE FROM dictation_history WHERE id = ?", (int(item_id),))
         conn.commit()
         return (cur.rowcount or 0) > 0
+
+
+def add_transcription_history(
+    db_path: Path,
+    job_id: str,
+    source_name: str,
+    title: str,
+    output_dir: str,
+    created_at: str,
+) -> int:
+    with open_db(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO transcription_history(job_id, source_name, title, output_dir, created_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (job_id, source_name, title, output_dir, created_at),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def list_transcription_history(db_path: Path, limit: int = 50) -> List[TranscriptionHistoryItem]:
+    limit = max(1, min(int(limit), 300))
+    with open_db(db_path) as conn:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcription_history)").fetchall()}
+        if "title" in cols:
+            rows = conn.execute(
+                """
+                SELECT id, job_id, source_name, title, output_dir, created_at
+                FROM transcription_history
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [
+                TranscriptionHistoryItem(
+                    id=int(row[0]),
+                    job_id=str(row[1]),
+                    source_name=str(row[2]),
+                    title=str(row[3] or ""),
+                    output_dir=str(row[4]),
+                    created_at=str(row[5]),
+                )
+                for row in rows
+            ]
+        rows = conn.execute(
+            """
+            SELECT id, job_id, source_name, output_dir, created_at
+            FROM transcription_history
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        TranscriptionHistoryItem(
+            id=int(row[0]),
+            job_id=str(row[1]),
+            source_name=str(row[2]),
+            title=str(row[2]),
+            output_dir=str(row[3]),
+            created_at=str(row[4]),
+        )
+        for row in rows
+    ]
+
+
+def get_transcription_history_item(db_path: Path, item_id: int) -> Optional[TranscriptionHistoryItem]:
+    with open_db(db_path) as conn:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcription_history)").fetchall()}
+        if "title" in cols:
+            row = conn.execute(
+                """
+                SELECT id, job_id, source_name, title, output_dir, created_at
+                FROM transcription_history
+                WHERE id = ?
+                """,
+                (int(item_id),),
+            ).fetchone()
+            if not row:
+                return None
+            return TranscriptionHistoryItem(
+                id=int(row[0]),
+                job_id=str(row[1]),
+                source_name=str(row[2]),
+                title=str(row[3] or ""),
+                output_dir=str(row[4]),
+                created_at=str(row[5]),
+            )
+        row = conn.execute(
+            """
+            SELECT id, job_id, source_name, output_dir, created_at
+            FROM transcription_history
+            WHERE id = ?
+            """,
+            (int(item_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return TranscriptionHistoryItem(
+            id=int(row[0]),
+            job_id=str(row[1]),
+            source_name=str(row[2]),
+            title=str(row[2]),
+            output_dir=str(row[3]),
+            created_at=str(row[4]),
+        )
+
+
+def delete_transcription_history_item(db_path: Path, item_id: int) -> bool:
+    with open_db(db_path) as conn:
+        cur = conn.execute("DELETE FROM transcription_history WHERE id = ?", (int(item_id),))
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+
+
+def delete_index_for_job(db_path: Path, job_id: str) -> None:
+    with open_db(db_path) as conn:
+        conn.execute("DELETE FROM chunks_fts WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM meta WHERE job_id = ?", (job_id,))
+        conn.commit()

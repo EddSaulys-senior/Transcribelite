@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from transcribelite import __version__
 from transcribelite.config import AppConfig
+from transcribelite.pipeline.summarize_ollama import check_ollama_health, generate_text
 
 
 def _safe_name(name: str) -> str:
@@ -31,6 +32,7 @@ def _format_time(seconds: float) -> str:
 def _render_note(
     cfg: AppConfig,
     source_path: Path,
+    title: str,
     transcript_text: str,
     segments: List[Dict[str, object]],
     stt_meta: Dict[str, object],
@@ -101,7 +103,7 @@ def _render_note(
             tags_block = tags_match.group(1).strip()
 
     context = _SafeDict(
-        title=f"TranscribeLite note: {source_path.name}",
+        title=title or f"TranscribeLite note: {source_path.name}",
         date=created_at,
         source_file=str(source_path),
         source=str(source_path),
@@ -135,6 +137,72 @@ def _render_note(
     return rendered
 
 
+def _clean_title(raw: str) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    text = text.strip("\"'`")
+    text = re.sub(r"[.?!,:;]+$", "", text).strip()
+    words = text.split()
+    if len(words) > 10:
+        words = words[:10]
+    cleaned = " ".join(words).strip()
+    return cleaned or "Без названия"
+
+
+def _first_words_title(text: str, min_words: int = 6, max_words: int = 10) -> str:
+    words = re.findall(r"\w+", text, flags=re.UNICODE)
+    if not words:
+        return "Без названия"
+    size = min(max_words, max(min_words, len(words)))
+    return _clean_title(" ".join(words[:size]))
+
+
+def _title_source_text(summary: Optional[str], transcript_text: str) -> str:
+    if summary and summary.strip():
+        summary_clean = re.sub(r"(?m)^\s*#+\s*", "", summary).strip()
+        summary_clean = re.sub(r"\s+", " ", summary_clean).strip()
+        if summary_clean:
+            return summary_clean[:500]
+    body = re.sub(r"\s+", " ", transcript_text).strip()
+    return body[:400]
+
+
+def make_title(cfg: AppConfig, source_text: str) -> str:
+    source_text = re.sub(r"\s+", " ", source_text).strip()
+    if not source_text:
+        return "Без названия"
+
+    prompt_template_path = cfg.paths.base_dir / "prompts" / "title_ru.txt"
+    prompt_template = ""
+    if prompt_template_path.exists():
+        try:
+            prompt_template = prompt_template_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            prompt_template = ""
+    if not prompt_template:
+        prompt_template = (
+            "Сделай заголовок 4-8 слов, без кавычек, без точки, только по смыслу.\n"
+            "Не выдумывай фактов.\n\n"
+            "Текст:\n{text}\n"
+        )
+
+    healthy, _ = check_ollama_health(cfg)
+    if healthy:
+        try:
+            prompt = prompt_template.format(text=source_text)
+            response = generate_text(
+                cfg,
+                prompt,
+                timeout_s=min(cfg.summarize.timeout_s, 45),
+                num_predict=32,
+                temperature=0.2,
+                top_p=0.9,
+            )
+            return _clean_title(response)
+        except Exception:
+            pass
+    return _first_words_title(source_text)
+
+
 def export_outputs(
     cfg: AppConfig,
     source_path: Path,
@@ -150,6 +218,8 @@ def export_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     created_at = datetime.now().isoformat(timespec="seconds")
+    title_source = _title_source_text(summary, transcript_text)
+    title = make_title(cfg, title_source)
 
     if cfg.export.save_txt:
         (out_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
@@ -159,6 +229,7 @@ def export_outputs(
             "meta": {
                 "created_at": created_at,
                 "source_file": str(source_path),
+                "title": title,
                 "app_version": __version__,
                 "profile": cfg.profile_name,
                 "requested_stt": {
@@ -184,6 +255,7 @@ def export_outputs(
         note_text = _render_note(
             cfg=cfg,
             source_path=source_path,
+            title=title,
             transcript_text=transcript_text,
             segments=segments,
             stt_meta=stt_meta,

@@ -465,6 +465,48 @@ function renderGlobalResults(items) {
   node.innerHTML = html;
 }
 
+function renderTranscriptionHistory(items) {
+  const node = $("transcriptionHistory");
+  if (!items || !items.length) {
+    node.innerHTML = '<p class="muted">История пока пуста</p>';
+    return;
+  }
+  const html = items
+    .map((item) => {
+      const created = escapeHtml((item.created_at || "").replace("T", " "));
+      const title = escapeHtml(item.title || item.source_name || "Без названия");
+      const jobId = escapeHtml(item.job_id || "");
+      const itemId = Number(item.id || 0);
+      return `<div class="history-item"><p class="search-meta">#${jobId} · ${created}</p><p class="history-q">${title}</p><div class="history-actions"><a class="btn btn-ghost" href="/api/transcription/history/${jobId}/zip">Export ZIP</a><button class="btn btn-ghost trans-history-del-btn" type="button" data-id="${itemId}" title="Удалить запись и файлы">🗑</button></div></div>`;
+    })
+    .join("");
+  node.innerHTML = html;
+}
+
+async function loadTranscriptionHistory() {
+  const response = await fetch("/api/transcription/history?limit=60");
+  if (!response.ok) {
+    renderTranscriptionHistory([]);
+    return;
+  }
+  const payload = await response.json();
+  renderTranscriptionHistory(Array.isArray(payload.items) ? payload.items : []);
+}
+
+async function deleteTranscriptionHistoryItem(itemId) {
+  if (!itemId || Number.isNaN(Number(itemId))) return;
+  const ok = window.confirm("Удалить запись из архива транскрибации и все связанные файлы?");
+  if (!ok) return;
+
+  const response = await fetch(`/api/transcription/history/${itemId}`, { method: "DELETE" });
+  if (!response.ok) {
+    setHint("Не удалось удалить запись транскрибации");
+    return;
+  }
+  setHint("Запись транскрибации и файлы удалены");
+  await loadTranscriptionHistory();
+}
+
 function renderDictHistory(items) {
   const node = $("dictHistory");
   if (!items || !items.length) {
@@ -850,6 +892,7 @@ async function pollJob() {
     const previewResponse = await fetch(`/api/jobs/${currentJobId}/preview`);
     const preview = await previewResponse.json();
     renderPreview(preview);
+    loadTranscriptionHistory();
   }
 
   if (job.status === "error") {
@@ -861,7 +904,13 @@ async function pollJob() {
 
 function initDnD() {
   const drop = $("drop");
-  drop.addEventListener("click", () => $("file").click());
+  drop.addEventListener("click", (e) => {
+    const target = e.target;
+    if (target instanceof HTMLElement && target.closest("#pick")) {
+      return;
+    }
+    $("file").click();
+  });
   drop.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") $("file").click();
   });
@@ -882,7 +931,11 @@ function initDnD() {
 }
 
 function initControls() {
-  $("pick").addEventListener("click", () => $("file").click());
+  $("pick").addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    $("file").click();
+  });
   $("file").addEventListener("change", (e) => {
     selectedFile = e.target.files?.[0] || null;
     setHint(selectedFile ? `Файл: ${selectedFile.name}` : "");
@@ -938,6 +991,13 @@ function initControls() {
     if (!target.classList.contains("history-del-btn")) return;
     const id = Number(target.dataset.id || "0");
     deleteDictHistoryItem(id);
+  });
+  $("transcriptionHistory").addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.classList.contains("trans-history-del-btn")) return;
+    const id = Number(target.dataset.id || "0");
+    deleteTranscriptionHistoryItem(id);
   });
   $("dictLiveText").addEventListener("input", () => {
     updateMarkdownPreviewFromLive();
@@ -1002,6 +1062,7 @@ function init() {
   initFx();
   loadQaHistory();
   loadDictHistory();
+  loadTranscriptionHistory();
   switchTab("transcribe");
   hideDictDownloads();
   setTimeline("queued");
