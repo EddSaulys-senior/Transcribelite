@@ -198,11 +198,11 @@
             <option value="ru">ru</option>
           </select>
           <label class="toggle-line"><input id="dictSummarize" type="checkbox" checked> summary</label>
-          <button id="dictStart" class="btn btn-main" type="button">Start</button>
-          <button id="dictStop" class="btn btn-ghost" type="button">Stop</button>
-          <button id="dictClear" class="btn btn-ghost" type="button">Clear</button>
-          <button id="dictSave" class="btn btn-ghost" type="button">Save</button>
-          <button id="dictCopy" class="btn btn-ghost" type="button">Copy</button>
+          <button id="dictStart" class="btn btn-main" type="button">Старт</button>
+          <button id="dictStop" class="btn btn-ghost" type="button">Стоп</button>
+          <button id="dictClear" class="btn btn-ghost" type="button">Очистить</button>
+          <button id="dictSave" class="btn btn-ghost" type="button">Сохранить</button>
+          <button id="dictCopy" class="btn btn-ghost" type="button">Копировать</button>
           <button id="polishFromDictation" class="btn btn-ghost" type="button">✨ AI</button>
         </div>
         <div class="meta-bar">
@@ -217,7 +217,7 @@
           <textarea id="dictLiveText" class="preview-box dict-live-edit" spellcheck="false"></textarea>
         </div>
         <div class="ask-result">
-          <h3>Markdown Preview</h3>
+          <h3>Markdown просмотр</h3>
           <div class="md-preview-tabs">
             <button id="tab-source" class="tab active" type="button">Исходник</button>
             <button id="tab-render" class="tab" type="button">Результат (MD)</button>
@@ -246,7 +246,7 @@
       </div>
       <div class="modal-grid">
         <div class="row">
-          <label for="polishPreset">Preset</label>
+          <label for="polishPreset">Настроенные промпты</label>
           <select id="polishPreset">
             <option value="punct">punct — пунктуация и ошибки</option>
             <option value="clean">clean — убрать повторы/паразиты</option>
@@ -266,7 +266,7 @@
         <textarea id="polishInstruction" rows="3" placeholder="Доп. уточнение или своя команда для custom"></textarea>
       </div>
       <div class="row row-single">
-        <label class="toggle-line"><input id="polishStrict" type="checkbox" checked> Строго соблюдать</label>
+        <label class="toggle-line"><input id="polishStrict" type="checkbox" checked> Строго следовать запросу</label>
       </div>
       <div class="actions">
         <button id="polishRun" class="btn btn-main" type="button">Run</button>
