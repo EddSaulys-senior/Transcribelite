@@ -132,6 +132,36 @@ h1 {
   background: var(--bg-soft);
 }
 
+.tabbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.tab-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: linear-gradient(135deg, var(--accent), #38bdf8);
+  color: #fff;
+  border: none;
+}
+
+.tab-pane {
+  display: none;
+}
+
+.tab-pane.active {
+  display: block;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -426,6 +456,42 @@ h3 {
   margin-top: 16px;
 }
 
+.dictation-card {
+  margin-top: 4px;
+}
+
+.dictation-controls {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(90px, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.dictation-controls select {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--bg-soft);
+  color: var(--ink);
+}
+
+.toggle-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.dictation-live {
+  margin-top: 12px;
+}
+
+.dictation-live .preview-box {
+  height: 300px;
+}
+
 .collapsible-card details {
   display: block;
 }
@@ -532,6 +598,17 @@ h3 {
   color: var(--ink-soft);
 }
 
+.history-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.history-del-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 .search-item {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -601,6 +678,10 @@ h3 {
 
   .ask-row {
     grid-template-columns: 1fr;
+  }
+
+  .dictation-controls {
+    grid-template-columns: 1fr 1fr;
   }
 
   .hero {

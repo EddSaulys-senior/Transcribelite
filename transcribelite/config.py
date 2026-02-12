@@ -67,6 +67,15 @@ DEFAULT_CONFIG = {
         "include_timestamps": "true",
         "filename_mode": "timestamp",
     },
+    "dictation": {
+        "hotkey": "ctrl+alt+space",
+        "profile": "fast",
+        "language": "ru",
+        "summarize": "true",
+        "max_seconds": "120",
+        "silence_stop": "false",
+        "auto_save": "true",
+    },
 }
 
 
@@ -139,6 +148,18 @@ class AppConfig:
     profile_auto: ProfileAutoConfig
     summarize: SummarizeConfig
     export: ExportConfig
+    dictation: "DictationConfig"
+
+
+@dataclass
+class DictationConfig:
+    hotkey: str
+    profile: str
+    language: str
+    summarize: bool
+    max_seconds: int
+    silence_stop: bool
+    auto_save: bool
 
 
 def _apply_profile_overrides(parser: ConfigParser) -> str:
@@ -262,5 +283,14 @@ def load_config(config_path: str | None = None, init_if_missing: bool = True) ->
             save_md=parser.getboolean("export", "save_md"),
             include_timestamps=parser.getboolean("export", "include_timestamps"),
             filename_mode=parser.get("export", "filename_mode"),
+        ),
+        dictation=DictationConfig(
+            hotkey=parser.get("dictation", "hotkey"),
+            profile=parser.get("dictation", "profile").strip().lower(),
+            language=parser.get("dictation", "language").strip().lower(),
+            summarize=parser.getboolean("dictation", "summarize"),
+            max_seconds=parser.getint("dictation", "max_seconds"),
+            silence_stop=parser.getboolean("dictation", "silence_stop"),
+            auto_save=parser.getboolean("dictation", "auto_save"),
         ),
     )

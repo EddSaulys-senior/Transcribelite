@@ -3,21 +3,27 @@
 import asyncio
 import json
 import re
+import subprocess
 import sys
 import uuid
 from urllib.parse import urlparse
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from transcribelite.config import load_config
+from transcribelite.pipeline.export import export_outputs
 from transcribelite.pipeline.summarize_ollama import check_ollama_health, generate_text
+from transcribelite.pipeline.summarize_ollama import summarize_text
+from transcribelite.search_index import add_dictation_history
 from transcribelite.search_index import add_qa_history
 from transcribelite.search_index import index_job as index_transcript_job
+from transcribelite.search_index import delete_dictation_history_item
+from transcribelite.search_index import list_dictation_history
 from transcribelite.search_index import list_qa_history
 from transcribelite.search_index import search_chunks
 from transcribelite.search_index import search_global_chunks
@@ -27,6 +33,7 @@ UPLOADS_DIR = APP_DIR / "cache" / "uploads"
 OUTPUT_DIR = APP_DIR / "output"
 DATA_DIR = APP_DIR / "data"
 INDEX_DB_PATH = DATA_DIR / "index.db"
+DICTATION_DIR = APP_DIR / "cache" / "dictation"
 WEB_DIR = APP_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
 QA_PROMPT_PATH = APP_DIR / "prompts" / "qa_ru.txt"
@@ -34,6 +41,7 @@ QA_PROMPT_PATH = APP_DIR / "prompts" / "qa_ru.txt"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+DICTATION_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
@@ -75,6 +83,30 @@ class Job:
 
 JOBS: Dict[str, Job] = {}
 JOB_ORDER: list[str] = []
+
+
+@dataclass
+class DictationSession:
+    session_id: str
+    cfg: Any
+    profile: str
+    language: str
+    summarize_enabled: bool
+    source_mime: str
+    webm_path: Path
+    tail_wav_path: Path
+    full_wav_path: Path
+    running: bool
+    final_text: str
+    last_chunk_text: str
+    model: Any
+    model_device: str
+    model_compute_type: str
+    saved_once: bool
+    worker: Optional[asyncio.Task]
+
+
+DICTATION_SESSIONS: Dict[str, DictationSession] = {}
 
 app = FastAPI(title="TranscribeLite Web", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -230,6 +262,287 @@ def _index_completed_job(job_id: str, out_dir: Path) -> None:
         output_dir=str(out_dir),
         created_at=created_at,
     )
+
+
+def _resolve_profile_for_cfg(cfg: Any, profile: str) -> str:
+    p = profile.strip().lower()
+    if p == "auto":
+        p = "balanced"
+    preset = cfg.profile_presets.get(p)
+    if preset is not None:
+        cfg.stt.model_name = preset.model_name
+        cfg.stt.compute_type = preset.compute_type
+        cfg.stt.beam_size = preset.beam_size
+        cfg.profile_name = p
+    return p
+
+
+def _build_cfg_for_dictation(profile: str, language: str, summarize_enabled: bool) -> Any:
+    cfg = load_config("config.ini", init_if_missing=True)
+    _resolve_profile_for_cfg(cfg, profile)
+    cfg.stt.task = "transcribe"
+    cfg.stt.vad_filter = True
+    cfg.stt.language = "auto" if language.strip().lower() == "auto" else language.strip().lower()
+    cfg.summarize.enabled = bool(summarize_enabled)
+    return cfg
+
+
+def _resolve_device_and_compute(preferred_device: str, preferred_compute: str) -> tuple[str, str]:
+    device = preferred_device.lower()
+    compute_type = preferred_compute
+    if device != "cuda":
+        return "cpu", "int8" if compute_type == "float16" else compute_type
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            return "cuda", compute_type
+    except Exception:
+        pass
+    return "cpu", "int8"
+
+
+def _init_dictation_model(cfg: Any) -> tuple[Any, str, str]:
+    from faster_whisper import WhisperModel
+
+    device, compute_type = _resolve_device_and_compute(cfg.stt.device, cfg.stt.compute_type)
+    attempts = [(device, compute_type)]
+    if device == "cuda" and compute_type != "float32":
+        attempts.append(("cuda", "float32"))
+    attempts.append(("cpu", "int8"))
+
+    last_exc: Optional[Exception] = None
+    for d, c in attempts:
+        try:
+            model = WhisperModel(
+                cfg.stt.model_name,
+                device=d,
+                compute_type=c,
+                download_root=str(cfg.paths.models_dir),
+            )
+            return model, d, c
+        except Exception as exc:
+            last_exc = exc
+    raise RuntimeError("Unable to initialize dictation model") from last_exc
+
+
+def _ffmpeg_decode_tail(ffmpeg_path: str, input_path: Path, output_wav: Path, tail_seconds: int = 10) -> None:
+    cmd_tail = [
+        ffmpeg_path,
+        "-y",
+        "-sseof",
+        f"-{tail_seconds}",
+        "-i",
+        str(input_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(output_wav),
+    ]
+    try:
+        subprocess.run(cmd_tail, capture_output=True, text=True, check=True)
+        return
+    except Exception:
+        pass
+
+    # Fallback for growing/incomplete webm where -sseof can fail intermittently.
+    cmd_full = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(output_wav),
+    ]
+    subprocess.run(cmd_full, capture_output=True, text=True, check=True)
+
+
+def _ffmpeg_decode_full(ffmpeg_path: str, input_path: Path, output_wav: Path) -> None:
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(output_wav),
+    ]
+    subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+
+def _transcribe_with_session_model(session: DictationSession, wav_path: Path) -> tuple[list[dict[str, object]], str, Any]:
+    language = None if session.cfg.stt.language.lower() == "auto" else session.cfg.stt.language
+    segments_iter, info = session.model.transcribe(
+        str(wav_path),
+        language=language,
+        task="transcribe",
+        beam_size=session.cfg.stt.beam_size,
+        vad_filter=session.cfg.stt.vad_filter,
+    )
+    segments: list[dict[str, object]] = []
+    text_parts: list[str] = []
+    for seg in segments_iter:
+        part = seg.text.strip()
+        if part:
+            text_parts.append(part)
+        segments.append({"start": float(seg.start), "end": float(seg.end), "text": part})
+    return segments, " ".join(text_parts).strip(), info
+
+
+def _merge_by_overlap_words(base_text: str, new_text: str, max_overlap_words: int = 80) -> str:
+    base_words = base_text.split()
+    new_words = new_text.split()
+    if not new_words:
+        return base_text
+    if not base_words:
+        return new_text
+
+    max_k = min(max_overlap_words, len(base_words), len(new_words))
+    overlap = 0
+    for k in range(max_k, 0, -1):
+        if base_words[-k:] == new_words[:k]:
+            overlap = k
+            break
+
+    delta_words = new_words[overlap:]
+    if not delta_words:
+        return base_text
+    return (base_text + " " + " ".join(delta_words)).strip()
+
+
+def _normalize_for_compare(text: str) -> str:
+    normalized = re.sub(r"[^\w\s]+", "", text.lower(), flags=re.UNICODE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+async def _dictation_worker(websocket: WebSocket, session_id: str) -> None:
+    while True:
+        await asyncio.sleep(1.1)
+        session = DICTATION_SESSIONS.get(session_id)
+        if not session or not session.running:
+            return
+        await _dictation_step(websocket, session)
+
+
+async def _dictation_step(websocket: WebSocket, session: DictationSession) -> None:
+    if not session.webm_path.exists() or session.webm_path.stat().st_size < 2048:
+        return
+    try:
+        t0 = datetime.now().timestamp()
+        await asyncio.to_thread(
+            _ffmpeg_decode_tail,
+            session.cfg.paths.ffmpeg_path,
+            session.webm_path,
+            session.tail_wav_path,
+            10,
+        )
+        _, chunk_text, _ = await asyncio.to_thread(_transcribe_with_session_model, session, session.tail_wav_path)
+        if chunk_text:
+            if _normalize_for_compare(chunk_text) == _normalize_for_compare(session.last_chunk_text):
+                return
+            session.last_chunk_text = chunk_text
+            session.final_text = _merge_by_overlap_words(session.final_text, chunk_text)
+            await websocket.send_json({"type": "partial", "text": chunk_text})
+            await websocket.send_json({"type": "final", "text": session.final_text})
+        dt = max(0.001, datetime.now().timestamp() - t0)
+        await websocket.send_json({"type": "stats", "rtf": round(dt / 10.0, 3), "seconds": 10})
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "message": f"dictation step failed: {exc}"})
+
+
+async def _finalize_dictation_save(session: DictationSession, session_id: str) -> tuple[str, str]:
+    await asyncio.to_thread(
+        _ffmpeg_decode_full,
+        session.cfg.paths.ffmpeg_path,
+        session.webm_path,
+        session.full_wav_path,
+    )
+    segments, text_full, info = await asyncio.to_thread(
+        _transcribe_with_session_model,
+        session,
+        session.full_wav_path,
+    )
+    final_text = text_full.strip() if text_full.strip() else session.final_text.strip()
+    session.final_text = final_text
+
+    stt_meta = {
+        "language": getattr(info, "language", None),
+        "language_probability": getattr(info, "language_probability", None),
+        "stt_engine": session.cfg.stt.engine,
+        "model_name": session.cfg.stt.model_name,
+        "device": session.model_device,
+        "compute_type": session.model_compute_type,
+    }
+
+    summary = None
+    summary_error = None
+    if session.summarize_enabled:
+        summary, summary_error = summarize_text(final_text, session.cfg)
+    else:
+        summary_error = "summary disabled in dictation"
+
+    source_name = f"dictation_{session_id}"
+    source_path = session.full_wav_path.with_name(source_name + ".wav")
+    out_dir = export_outputs(
+        cfg=session.cfg,
+        source_path=source_path,
+        transcript_text=final_text,
+        segments=segments,
+        stt_meta=stt_meta,
+        summary=summary,
+        summary_error=summary_error,
+    )
+
+    job_id = f"dict_{session_id[:12]}"
+    job = _create_job(profile=session.profile, filename=source_name + ".wav", job_id=job_id)
+    job.status = "done"
+    job.stage = "done"
+    job.progress = 1.0
+    job.message = "Done"
+    job.output_dir = str(out_dir)
+    try:
+        _index_completed_job(job_id, out_dir)
+    except Exception:
+        pass
+    try:
+        preview = final_text[:280].strip()
+        add_dictation_history(
+            db_path=INDEX_DB_PATH,
+            job_id=job_id,
+            output_dir=str(out_dir),
+            text_preview=preview,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+        )
+    except Exception:
+        pass
+    return job_id, str(out_dir)
+
+
+async def _save_dictation_session(
+    websocket: WebSocket,
+    session: DictationSession,
+    session_id: str,
+) -> None:
+    if session.saved_once:
+        await websocket.send_json({"type": "status", "message": "already saved"})
+        return
+    await _dictation_step(websocket, session)
+    if not session.final_text.strip():
+        await websocket.send_json({"type": "error", "message": "nothing to save"})
+        return
+    try:
+        job_id, output_dir = await _finalize_dictation_save(session, session_id)
+        session.saved_once = True
+        await websocket.send_json({"type": "saved", "job_id": job_id, "output_dir": output_dir})
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "message": f"save failed: {exc}"})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -479,6 +792,179 @@ def get_qa_history(limit: int = Query(50, ge=1, le=200)) -> JSONResponse:
         for item in history
     ]
     return JSONResponse({"items": items})
+
+
+@app.get("/api/dictation/history")
+def get_dictation_history(limit: int = Query(50, ge=1, le=200)) -> JSONResponse:
+    history = list_dictation_history(INDEX_DB_PATH, limit=limit)
+    items = [
+        {
+            "id": item.id,
+            "job_id": item.job_id,
+            "output_dir": item.output_dir,
+            "text_preview": item.text_preview,
+            "created_at": item.created_at,
+        }
+        for item in history
+    ]
+    return JSONResponse({"items": items})
+
+
+@app.delete("/api/dictation/history/{item_id}")
+def delete_dictation_history(item_id: int) -> JSONResponse:
+    deleted = delete_dictation_history_item(INDEX_DB_PATH, item_id)
+    if not deleted:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"deleted": True, "id": item_id})
+
+
+@app.websocket("/ws/dictation")
+async def ws_dictation(websocket: WebSocket) -> None:
+    await websocket.accept()
+    session_id = uuid.uuid4().hex[:16]
+    DICTATION_SESSIONS.pop(session_id, None)
+    session: Optional[DictationSession] = None
+
+    async def stop_worker() -> None:
+        if session and session.worker:
+            session.running = False
+            session.worker.cancel()
+            try:
+                await session.worker
+            except BaseException:
+                pass
+            session.worker = None
+
+    try:
+        await websocket.send_json({"type": "status", "message": "connected", "session_id": session_id})
+        while True:
+            message = await websocket.receive()
+            msg_type = message.get("type")
+
+            if msg_type == "websocket.disconnect":
+                break
+
+            if message.get("bytes") is not None:
+                if session and session.running:
+                    with session.webm_path.open("ab") as f:
+                        f.write(message["bytes"])
+                continue
+
+            text = message.get("text")
+            if not text:
+                continue
+
+            try:
+                payload = json.loads(text)
+            except Exception:
+                await websocket.send_json({"type": "error", "message": "invalid json command"})
+                continue
+
+            command = str(payload.get("type", "")).strip().lower()
+
+            if command == "start":
+                if session and session.running:
+                    await websocket.send_json({"type": "status", "message": "already running"})
+                    continue
+
+                base_cfg = load_config("config.ini", init_if_missing=True)
+                default_profile = base_cfg.dictation.profile
+                default_language = base_cfg.dictation.language
+                default_summarize = base_cfg.dictation.summarize
+                profile = str(payload.get("profile", default_profile)).strip().lower()
+                language = str(payload.get("language", default_language)).strip().lower()
+                summarize_enabled = bool(payload.get("summarize", default_summarize))
+                source_mime = str(payload.get("mime_type", "")).strip()
+
+                cfg = _build_cfg_for_dictation(profile=profile, language=language, summarize_enabled=summarize_enabled)
+                model, model_device, model_compute_type = await asyncio.to_thread(_init_dictation_model, cfg)
+
+                base = DICTATION_DIR / session_id
+                webm_path = base.with_suffix(".webm")
+                tail_wav_path = base.with_name(base.name + "_tail.wav")
+                full_wav_path = base.with_name(base.name + "_full.wav")
+                webm_path.write_bytes(b"")
+
+                session = DictationSession(
+                    session_id=session_id,
+                    cfg=cfg,
+                    profile=profile,
+                    language=language,
+                    summarize_enabled=summarize_enabled,
+                    source_mime=source_mime,
+                    webm_path=webm_path,
+                    tail_wav_path=tail_wav_path,
+                    full_wav_path=full_wav_path,
+                    running=True,
+                    final_text="",
+                    last_chunk_text="",
+                    model=model,
+                    model_device=model_device,
+                    model_compute_type=model_compute_type,
+                    saved_once=False,
+                    worker=None,
+                )
+                session.worker = asyncio.create_task(_dictation_worker(websocket, session_id))
+                DICTATION_SESSIONS[session_id] = session
+                await websocket.send_json(
+                    {
+                        "type": "started",
+                        "session_id": session_id,
+                        "profile": profile,
+                        "language": language,
+                        "device": model_device,
+                        "model": cfg.stt.model_name,
+                    }
+                )
+                await websocket.send_json({"type": "state", "state": "recording"})
+                continue
+
+            if command == "stop":
+                await stop_worker()
+                if session:
+                    await _dictation_step(websocket, session)
+                    await websocket.send_json({"type": "final", "text": session.final_text})
+                    await websocket.send_json({"type": "stopped"})
+                    await websocket.send_json({"type": "state", "state": "stopped"})
+                    if session.cfg.dictation.auto_save:
+                        await _save_dictation_session(websocket, session, session_id)
+                continue
+
+            if command == "flush":
+                if session:
+                    await _dictation_step(websocket, session)
+                continue
+
+            if command == "clear":
+                if session:
+                    session.final_text = ""
+                    session.saved_once = False
+                    if session.webm_path.exists():
+                        session.webm_path.write_bytes(b"")
+                    await websocket.send_json({"type": "final", "text": ""})
+                continue
+
+            if command == "save":
+                if not session:
+                    await websocket.send_json({"type": "error", "message": "dictation not started"})
+                    continue
+                await stop_worker()
+                await _save_dictation_session(websocket, session, session_id)
+                continue
+
+            await websocket.send_json({"type": "error", "message": f"unknown command: {command}"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await stop_worker()
+        if session:
+            for path in (session.tail_wav_path, session.full_wav_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        DICTATION_SESSIONS.pop(session_id, None)
+
 
 async def run_transcribe_job(job_id: str, input_path: Path) -> None:
     job = JOBS[job_id]

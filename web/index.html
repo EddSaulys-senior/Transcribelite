@@ -27,7 +27,12 @@
         <div class="pill">127.0.0.1 only</div>
       </div>
     </header>
+    <div class="tabbar">
+      <button id="tabBtnTranscribe" class="tab-btn active" type="button">📝 Транскрибация</button>
+      <button id="tabBtnDictation" class="tab-btn" type="button">🎙 Диктовка</button>
+    </div>
 
+    <div id="tabTranscribe" class="tab-pane active">
     <section class="grid">
       <article class="card upload-card">
         <h2>Новый запуск</h2>
@@ -163,6 +168,51 @@
         </div>
       </details>
     </section>
+    </div>
+
+    <div id="tabDictation" class="tab-pane">
+      <section class="card dictation-card">
+        <h2>🎙 Диктовка (127.0.0.1 only)</h2>
+        <div class="dictation-controls">
+          <select id="dictProfile">
+            <option value="auto">auto</option>
+            <option value="fast" selected>fast</option>
+            <option value="balanced">balanced</option>
+            <option value="quality">quality</option>
+          </select>
+          <select id="dictLanguage">
+            <option value="auto" selected>auto</option>
+            <option value="ru">ru</option>
+          </select>
+          <label class="toggle-line"><input id="dictSummarize" type="checkbox" checked> summary</label>
+          <button id="dictStart" class="btn btn-main" type="button">Start</button>
+          <button id="dictStop" class="btn btn-ghost" type="button">Stop</button>
+          <button id="dictClear" class="btn btn-ghost" type="button">Clear</button>
+          <button id="dictSave" class="btn btn-ghost" type="button">Save</button>
+          <button id="dictCopy" class="btn btn-ghost" type="button">Copy</button>
+        </div>
+        <div class="meta-bar">
+          <span id="dictState">State: idle</span>
+          <span id="dictModel">Model: —</span>
+          <span id="dictDevice">Device: —</span>
+          <span id="dictRtf">RTF: —</span>
+        </div>
+        <div id="dictHint" class="hint"></div>
+        <div class="dictation-live">
+          <h3>Live text</h3>
+          <pre id="dictLiveText" class="preview-box"></pre>
+        </div>
+        <div class="ask-result">
+          <h3>История диктовки</h3>
+          <div id="dictHistory" class="preview-box rich-box"><p class="muted">История пока пуста</p></div>
+        </div>
+        <div class="downloads">
+          <a id="dictDlNote" class="btn btn-ghost hidden" href="#">note.md</a>
+          <a id="dictDlTxt" class="btn btn-ghost hidden" href="#">transcript.txt</a>
+          <a id="dictDlJson" class="btn btn-ghost hidden" href="#">transcript.json</a>
+        </div>
+      </section>
+    </div>
   </main>
 
   <script src="/static/app.js"></script>

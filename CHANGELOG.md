@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.10.2 - 2026-02-12
+
+- Added deletion of dictation history items with confirmation in UI.
+- Added backend endpoint: `DELETE /api/dictation/history/{item_id}`.
+
+## 0.10.1 - 2026-02-12
+
+- Fixed dictation duplicate text growth with stronger anti-repeat checks in live chunk processing.
+- Improved dictation ffmpeg robustness:
+  - `-sseof` decode now has fallback to full decode for growing/incomplete `.webm`.
+- Added persistent dictation history storage in SQLite (`dictation_history`).
+- Added API endpoint: `GET /api/dictation/history`.
+- Added "История диктовки" panel in dictation tab UI.
+
+## 0.10.0 - 2026-02-12
+
+- Added dictation auto-save on `Stop` (configurable via `dictation.auto_save`).
+- Added dictation config section in `config.ini`:
+  - `hotkey`, `profile`, `language`, `summarize`, `max_seconds`, `silence_stop`, `auto_save`
+- Added global hotkey helper (Mode B):
+  - new module `transcribelite/hotkey.py`
+  - new launcher `scripts/run_hotkey.bat`
+  - default hotkey: `Ctrl+Alt+Space`
+  - first press starts local mic capture, second press stops + transcribes + exports to `output/...`
+- Added dependencies for hotkey mode:
+  - `pynput`, `sounddevice`, `soundfile`
+- Improved dictation WebSocket protocol by emitting explicit `state` updates (`recording` / `stopped`).
+
+## 0.9.0 - 2026-02-12
+
+- Added real-time dictation tab (`🎙 Диктовка`) in Web UI.
+- Added local WebSocket endpoint for streaming mic audio:
+  - `WS /ws/dictation`
+  - commands: `start`, `stop`, `flush`, `clear`, `save`
+  - events: `partial`, `final`, `stats`, `saved`, `error`
+- Implemented browser audio chunk streaming via `MediaRecorder` (`webm/ogg opus`) and binary WS frames.
+- Added server-side dictation session manager with temp files in `cache/dictation/`.
+- Added periodic near-live transcription loop using local `ffmpeg` + `faster-whisper`.
+- Added overlap-based text deduplication for incremental dictation text updates.
+- Added dictation save flow to regular project outputs (`transcript.txt/json`, `note.md`) via existing export pipeline.
+- Dictation save supports optional local summary; if Ollama is unavailable summary is skipped without failing save.
+- Added dictation quick actions in UI: `Start / Stop / Clear / Save / Copy`.
+
 ## 0.8.2 - 2026-02-12
 
 - Added persistent Q&A history storage in local SQLite (`data/index.db`, table `qa_history`).

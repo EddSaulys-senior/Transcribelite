@@ -7,6 +7,11 @@ let fxCtx = null;
 let sparks = [];
 let activeStage = "queued";
 let askHistory = [];
+let dictWs = null;
+let dictRecorder = null;
+let dictStream = null;
+let dictRunning = false;
+let dictLastJobId = null;
 
 const STAGES = ["download", "ingest", "stt", "summarize", "export"];
 const THEME_KEY = "transcribelite_theme";
@@ -62,6 +67,21 @@ function hideDownloads() {
   $("dl_note").classList.add("hidden");
   $("dl_txt").classList.add("hidden");
   $("dl_json").classList.add("hidden");
+}
+
+function showDictDownloads(jobId) {
+  $("dictDlNote").href = `/api/jobs/${jobId}/download/note`;
+  $("dictDlTxt").href = `/api/jobs/${jobId}/download/txt`;
+  $("dictDlJson").href = `/api/jobs/${jobId}/download/json`;
+  $("dictDlNote").classList.remove("hidden");
+  $("dictDlTxt").classList.remove("hidden");
+  $("dictDlJson").classList.remove("hidden");
+}
+
+function hideDictDownloads() {
+  $("dictDlNote").classList.add("hidden");
+  $("dictDlTxt").classList.add("hidden");
+  $("dictDlJson").classList.add("hidden");
 }
 
 function applyTheme(theme) {
@@ -216,6 +236,244 @@ function renderGlobalResults(items) {
     })
     .join("");
   node.innerHTML = html;
+}
+
+function renderDictHistory(items) {
+  const node = $("dictHistory");
+  if (!items || !items.length) {
+    node.innerHTML = '<p class="muted">История пока пуста</p>';
+    return;
+  }
+  const html = items
+    .map((item) => {
+      const created = escapeHtml((item.created_at || "").replace("T", " "));
+      const preview = escapeHtml(item.text_preview || "");
+      const jobId = escapeHtml(item.job_id || "");
+      const itemId = Number(item.id || 0);
+      return `<div class="history-item"><p class="search-meta">#${jobId} · ${created}</p><p class="history-a">${preview}</p><div class="history-actions"><button class="btn btn-ghost history-del-btn" type="button" data-id="${itemId}">Удалить</button></div></div>`;
+    })
+    .join("");
+  node.innerHTML = html;
+}
+
+async function loadDictHistory() {
+  const response = await fetch("/api/dictation/history?limit=30");
+  if (!response.ok) {
+    renderDictHistory([]);
+    return;
+  }
+  const payload = await response.json();
+  renderDictHistory(Array.isArray(payload.items) ? payload.items : []);
+}
+
+async function deleteDictHistoryItem(itemId) {
+  if (!itemId || Number.isNaN(Number(itemId))) return;
+  const ok = window.confirm("Удалить запись из истории диктовки?");
+  if (!ok) return;
+
+  const response = await fetch(`/api/dictation/history/${itemId}`, { method: "DELETE" });
+  if (!response.ok) {
+    setDictHint("Не удалось удалить запись");
+    return;
+  }
+  setDictHint("Запись истории удалена");
+  await loadDictHistory();
+}
+
+function switchTab(tabName) {
+  const isTranscribe = tabName === "transcribe";
+  $("tabTranscribe").classList.toggle("active", isTranscribe);
+  $("tabDictation").classList.toggle("active", !isTranscribe);
+  $("tabBtnTranscribe").classList.toggle("active", isTranscribe);
+  $("tabBtnDictation").classList.toggle("active", !isTranscribe);
+}
+
+function detectWsUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${protocol}://${window.location.host}/ws/dictation`;
+}
+
+function pickDictationMimeType() {
+  const options = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
+  for (const opt of options) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(opt)) return opt;
+  }
+  return "";
+}
+
+function setDictState(text) {
+  $("dictState").textContent = `State: ${text}`;
+}
+
+function setDictHint(text) {
+  $("dictHint").textContent = text || "";
+}
+
+function stopDictationCapture() {
+  if (dictRecorder && dictRecorder.state !== "inactive") {
+    dictRecorder.stop();
+  }
+  if (dictStream) {
+    dictStream.getTracks().forEach((t) => t.stop());
+  }
+  dictRecorder = null;
+  dictStream = null;
+}
+
+function wsSendJson(payload) {
+  if (dictWs && dictWs.readyState === WebSocket.OPEN) {
+    dictWs.send(JSON.stringify(payload));
+  }
+}
+
+function setupDictationWsHandlers() {
+  dictWs.onopen = () => {
+    setDictHint("WS connected");
+  };
+
+  dictWs.onmessage = (event) => {
+    let payload = null;
+    try {
+      payload = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    const t = payload.type;
+    if (t === "status") {
+      setDictHint(payload.message || "");
+    } else if (t === "state") {
+      setDictState(payload.state || "idle");
+    } else if (t === "started") {
+      setDictState("listening");
+      $("dictModel").textContent = `Model: ${payload.model || "-"}`;
+      $("dictDevice").textContent = `Device: ${payload.device || "-"}`;
+      setDictHint(`Listening... profile=${payload.profile}`);
+    } else if (t === "partial") {
+      setDictHint("Transcribing...");
+    } else if (t === "final") {
+      $("dictLiveText").textContent = payload.text || "";
+    } else if (t === "stats") {
+      $("dictRtf").textContent = `RTF: ${payload.rtf ?? "-"}`;
+    } else if (t === "saved") {
+      dictLastJobId = payload.job_id || null;
+      if (dictLastJobId) showDictDownloads(dictLastJobId);
+      setDictHint(`Saved: ${payload.output_dir || ""}`);
+      setDictState("saved");
+      loadDictHistory();
+    } else if (t === "stopped") {
+      setDictState("stopped");
+      setDictHint("Stopped");
+    } else if (t === "error") {
+      setDictHint(payload.message || "dictation error");
+      setDictState("error");
+    }
+  };
+
+  dictWs.onclose = () => {
+    dictRunning = false;
+    setDictState("disconnected");
+  };
+}
+
+async function startDictation() {
+  if (dictRunning) return;
+  const mimeType = pickDictationMimeType();
+  if (!mimeType) {
+    setDictHint("Browser does not support Opus MediaRecorder mimeType.");
+    return;
+  }
+  hideDictDownloads();
+  $("dictRtf").textContent = "RTF: —";
+
+  try {
+    dictStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    setDictHint(`Microphone error: ${err}`);
+    return;
+  }
+
+  dictWs = new WebSocket(detectWsUrl());
+  setupDictationWsHandlers();
+
+  dictRecorder = new MediaRecorder(dictStream, { mimeType });
+  dictRecorder.ondataavailable = async (e) => {
+    if (!dictRunning || !e.data || e.data.size === 0) return;
+    const buffer = await e.data.arrayBuffer();
+    if (dictWs && dictWs.readyState === WebSocket.OPEN) {
+      dictWs.send(buffer);
+    }
+  };
+  dictRecorder.onerror = () => {
+    setDictHint("Recorder error");
+  };
+
+  const waitOpen = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("WS timeout")), 5000);
+    dictWs.onopen = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    dictWs.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("WS open error"));
+    };
+  });
+
+  try {
+    await waitOpen;
+  } catch (err) {
+    setDictHint(`WS error: ${err}`);
+    stopDictationCapture();
+    return;
+  }
+
+  setupDictationWsHandlers();
+  wsSendJson({
+    type: "start",
+    profile: $("dictProfile").value,
+    language: $("dictLanguage").value,
+    summarize: $("dictSummarize").checked,
+    mime_type: mimeType,
+  });
+  dictRecorder.start(320);
+  dictRunning = true;
+  setDictState("listening");
+}
+
+function stopDictation() {
+  if (!dictRunning) return;
+  dictRunning = false;
+  stopDictationCapture();
+  wsSendJson({ type: "stop" });
+  setDictState("stopping");
+}
+
+function clearDictation() {
+  $("dictLiveText").textContent = "";
+  setDictHint("");
+  setDictState("idle");
+  hideDictDownloads();
+  wsSendJson({ type: "clear" });
+}
+
+function saveDictation() {
+  if (!dictWs || dictWs.readyState !== WebSocket.OPEN) {
+    setDictHint("Dictation WS not connected");
+    return;
+  }
+  wsSendJson({ type: "save" });
+  setDictHint("Saving...");
+}
+
+async function copyDictationText() {
+  const text = $("dictLiveText").textContent || "";
+  if (!text.trim()) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    setDictHint("Copied");
+  } catch {
+    setDictHint("Copy failed");
+  }
 }
 
 async function searchGlobalHistory() {
@@ -422,6 +680,22 @@ function initControls() {
       searchGlobalHistory();
     }
   });
+
+  $("tabBtnTranscribe").addEventListener("click", () => switchTab("transcribe"));
+  $("tabBtnDictation").addEventListener("click", () => switchTab("dictation"));
+
+  $("dictStart").addEventListener("click", startDictation);
+  $("dictStop").addEventListener("click", stopDictation);
+  $("dictClear").addEventListener("click", clearDictation);
+  $("dictSave").addEventListener("click", saveDictation);
+  $("dictCopy").addEventListener("click", copyDictationText);
+  $("dictHistory").addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.classList.contains("history-del-btn")) return;
+    const id = Number(target.dataset.id || "0");
+    deleteDictHistoryItem(id);
+  });
 }
 
 function resizeFx() {
@@ -479,6 +753,9 @@ function init() {
   initControls();
   initFx();
   loadQaHistory();
+  loadDictHistory();
+  switchTab("transcribe");
+  hideDictDownloads();
   setTimeline("queued");
 }
 

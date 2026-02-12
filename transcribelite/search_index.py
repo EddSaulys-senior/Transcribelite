@@ -36,6 +36,15 @@ class QaHistoryItem:
     created_at: str
 
 
+@dataclass
+class DictationHistoryItem:
+    id: int
+    job_id: str
+    output_dir: str
+    text_preview: str
+    created_at: str
+
+
 def open_db(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -69,6 +78,17 @@ def open_db(db_path: Path) -> sqlite3.Connection:
             job_id TEXT NOT NULL,
             question TEXT NOT NULL,
             answer TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dictation_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            output_dir TEXT NOT NULL,
+            text_preview TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
         """
@@ -267,3 +287,53 @@ def list_qa_history(db_path: Path, limit: int = 50) -> List[QaHistoryItem]:
         )
         for row in rows
     ]
+
+
+def add_dictation_history(
+    db_path: Path,
+    job_id: str,
+    output_dir: str,
+    text_preview: str,
+    created_at: str,
+) -> int:
+    with open_db(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO dictation_history(job_id, output_dir, text_preview, created_at)
+            VALUES(?, ?, ?, ?)
+            """,
+            (job_id, output_dir, text_preview, created_at),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def list_dictation_history(db_path: Path, limit: int = 50) -> List[DictationHistoryItem]:
+    limit = max(1, min(int(limit), 200))
+    with open_db(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, job_id, output_dir, text_preview, created_at
+            FROM dictation_history
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        DictationHistoryItem(
+            id=int(row[0]),
+            job_id=str(row[1]),
+            output_dir=str(row[2]),
+            text_preview=str(row[3]),
+            created_at=str(row[4]),
+        )
+        for row in rows
+    ]
+
+
+def delete_dictation_history_item(db_path: Path, item_id: int) -> bool:
+    with open_db(db_path) as conn:
+        cur = conn.execute("DELETE FROM dictation_history WHERE id = ?", (int(item_id),))
+        conn.commit()
+        return (cur.rowcount or 0) > 0

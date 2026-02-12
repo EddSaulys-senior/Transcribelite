@@ -5,3 +5,6 @@ fastapi==0.129.0
 uvicorn[standard]==0.40.0
 python-multipart==0.0.22
 yt-dlp==2026.2.4
+pynput==1.8.1
+sounddevice==0.5.3
+soundfile==0.13.1
