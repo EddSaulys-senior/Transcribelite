@@ -1,8 +1,9 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
+import requests
 from transcribelite.config import AppConfig
 from transcribelite.utils.http import request_json
 
@@ -47,12 +48,15 @@ def generate_text(
     timeout_s: Optional[int] = None,
     num_predict: Optional[int] = None,
     temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
 ) -> str:
     options = {}
     if num_predict is not None:
         options["num_predict"] = int(num_predict)
     if temperature is not None:
         options["temperature"] = float(temperature)
+    if top_p is not None:
+        options["top_p"] = float(top_p)
 
     payload = {
         "model": cfg.summarize.model,
@@ -71,6 +75,71 @@ def generate_text(
     if not isinstance(response, str):
         raise RuntimeError("Ollama returned empty response")
     return response.strip()
+
+
+def list_ollama_models(cfg: AppConfig) -> list[str]:
+    data = request_json("GET", f"{cfg.summarize.ollama_url}/api/tags", timeout_s=15, retries=0)
+    models = data.get("models")
+    if not isinstance(models, list):
+        return []
+    names: list[str] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        name = str(model.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def ensure_model_available(
+    cfg: AppConfig,
+    model: str,
+    timeout_s: int = 120,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> None:
+    required = model.strip()
+    if not required:
+        raise RuntimeError("Model name is empty")
+
+    names = list_ollama_models(cfg)
+    if required in names:
+        if on_progress:
+            on_progress("model already available")
+        return
+
+    if on_progress:
+        on_progress(f"downloading model: {required}")
+
+    url = f"{cfg.summarize.ollama_url}/api/pull"
+    payload = {"name": required, "stream": True}
+    with requests.post(url, json=payload, timeout=timeout_s, stream=True) as response:
+        response.raise_for_status()
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            status = ""
+            try:
+                row = request_json_line(raw_line)
+                status = str(row.get("status") or "").strip()
+                total = row.get("total")
+                completed = row.get("completed")
+                if status and total and completed and isinstance(total, int) and total > 0:
+                    pct = int((completed / total) * 100)
+                    status = f"{status} ({pct}%)"
+            except Exception:
+                status = str(raw_line).strip()
+            if on_progress and status:
+                on_progress(status)
+
+
+def request_json_line(raw_line: str) -> dict:
+    import json
+
+    data = json.loads(raw_line)
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 def summarize_text(transcript: str, cfg: AppConfig) -> Tuple[Optional[str], Optional[str]]:

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import re
 import subprocess
@@ -12,12 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from transcribelite.config import load_config
 from transcribelite.pipeline.export import export_outputs
-from transcribelite.pipeline.summarize_ollama import check_ollama_health, generate_text
+from transcribelite.pipeline.summarize_ollama import check_ollama_health, ensure_model_available, generate_text
+from transcribelite.pipeline.summarize_ollama import list_ollama_models
 from transcribelite.pipeline.summarize_ollama import summarize_text
 from transcribelite.search_index import add_dictation_history
 from transcribelite.search_index import add_qa_history
@@ -37,6 +39,7 @@ DICTATION_DIR = APP_DIR / "cache" / "dictation"
 WEB_DIR = APP_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
 QA_PROMPT_PATH = APP_DIR / "prompts" / "qa_ru.txt"
+POLISH_PROMPTS_DIR = APP_DIR / "prompts" / "polish"
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,6 +61,23 @@ ALLOWED_EXTENSIONS = {
     ".webm",
 }
 ALLOWED_PROFILES = {"auto", "fast", "balanced", "quality"}
+ALLOWED_POLISH_PRESETS = {"punct", "clean", "short", "task", "obsidian", "custom"}
+POLISH_PRESET_FILES = {
+    "punct": "punct_ru.txt",
+    "clean": "clean_ru.txt",
+    "short": "short_ru.txt",
+    "task": "task_ru.txt",
+    "obsidian": "obsidian_ru.txt",
+    "custom": "custom_ru.txt",
+}
+POLISH_NUM_PREDICT = {
+    "punct": 350,
+    "clean": 350,
+    "task": 350,
+    "short": 220,
+    "obsidian": 600,
+    "custom": 350,
+}
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GB
 MAX_REMOTE_DOWNLOAD_BYTES = 1024 * 1024 * 1024  # 1 GB
 MAX_REMOTE_DURATION_SECONDS = 3 * 60 * 60  # 3 hours
@@ -102,11 +122,25 @@ class DictationSession:
     model: Any
     model_device: str
     model_compute_type: str
+    manual_text_override: bool
     saved_once: bool
     worker: Optional[asyncio.Task]
 
 
 DICTATION_SESSIONS: Dict[str, DictationSession] = {}
+
+
+@dataclass
+class PullState:
+    id: str
+    model: str
+    status: str
+    message: str
+    done: bool
+    error: Optional[str]
+
+
+OLLAMA_PULLS: Dict[str, PullState] = {}
 
 app = FastAPI(title="TranscribeLite Web", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -228,6 +262,125 @@ def _short_source_text(text: str, max_chars: int = 360) -> str:
     if len(cleaned) <= max_chars:
         return cleaned
     return cleaned[:max_chars].rstrip() + "..."
+
+
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_prompt_file(path: Path) -> str:
+    if not path.exists():
+        raise HTTPException(status_code=500, detail=f"Missing prompt file: {path}")
+    for enc in ("utf-8", "utf-8-sig", "cp1251"):
+        try:
+            return path.read_text(encoding=enc)
+        except Exception:
+            continue
+    raise HTTPException(status_code=500, detail=f"Unable to read prompt file: {path}")
+
+
+def _build_polish_prompt(
+    preset: str,
+    text: str,
+    instruction: str,
+    strict: bool,
+) -> str:
+    parts: list[str] = []
+    if strict:
+        parts.append(_read_prompt_file(POLISH_PROMPTS_DIR / "base_strict_ru.txt").strip())
+    preset_file = POLISH_PRESET_FILES[preset]
+    preset_template = _read_prompt_file(POLISH_PROMPTS_DIR / preset_file)
+    if preset == "custom":
+        preset_block = preset_template.format(instruction=instruction or "Улучши читаемость текста.")
+    else:
+        preset_block = preset_template
+        if instruction:
+            preset_block = (
+                preset_block.rstrip()
+                + "\n\nДоп. инструкция пользователя:\n"
+                + instruction.strip()
+            )
+    parts.append(preset_block.strip())
+    parts.append("Исходный текст:\n" + text.strip())
+    return "\n\n".join([p for p in parts if p])
+
+
+def _polish_is_markdown(preset: str, polished_text: str) -> bool:
+    if preset == "obsidian":
+        return True
+    stripped = polished_text.lstrip()
+    return stripped.startswith("#") or stripped.startswith("##")
+
+
+def _save_polish_result(
+    out_dir: Path,
+    polished_text: str,
+    preset: str,
+    instruction: str,
+    strict: bool,
+    model: str,
+    source_job_id: str,
+) -> tuple[str, str]:
+    is_markdown = _polish_is_markdown(preset, polished_text)
+    target_name = "note_polished.md" if is_markdown else "transcript_polished.txt"
+    target_path = out_dir / target_name
+    target_path.write_text(polished_text, encoding="utf-8")
+
+    created_at = datetime.now().isoformat(timespec="seconds")
+    meta_path = out_dir / f"polish_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    meta_payload = {
+        "preset": preset,
+        "instruction": instruction,
+        "strict": strict,
+        "model": model,
+        "created_at": created_at,
+        "source_job_id": source_job_id,
+        "format": "markdown" if is_markdown else "text",
+        "saved_path": str(target_path),
+    }
+    meta_path.write_text(json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(target_path), ("markdown" if is_markdown else "text")
+
+
+async def _read_polish_payload(request: Request) -> dict:
+    ctype = request.headers.get("content-type", "").lower()
+    if "application/json" in ctype:
+        payload = await request.json()
+        return payload if isinstance(payload, dict) else {}
+    form = await request.form()
+    return {k: form.get(k) for k in form.keys()}
+
+
+def _set_pull_message(pull_id: str, message: str) -> None:
+    state = OLLAMA_PULLS.get(pull_id)
+    if not state:
+        return
+    state.message = message
+    state.status = "running"
+
+
+def _set_pull_done(pull_id: str, message: str) -> None:
+    state = OLLAMA_PULLS.get(pull_id)
+    if not state:
+        return
+    state.done = True
+    state.status = "done"
+    state.message = message
+    state.error = None
+
+
+def _set_pull_error(pull_id: str, error: str) -> None:
+    state = OLLAMA_PULLS.get(pull_id)
+    if not state:
+        return
+    state.done = True
+    state.status = "error"
+    state.error = error
+    state.message = "failed"
 
 
 def _index_completed_job(job_id: str, out_dir: Path) -> None:
@@ -403,10 +556,31 @@ def _merge_by_overlap_words(base_text: str, new_text: str, max_overlap_words: in
     if not base_words:
         return new_text
 
+    # Strong anti-dup check: if new chunk is almost equal to the tail, skip it.
+    new_norm = _normalize_for_compare(new_text)
+    tail_text = " ".join(base_words[-max(25, len(new_words) + 12) :])
+    tail_norm = _normalize_for_compare(tail_text)
+    if new_norm and tail_norm:
+        ratio = difflib.SequenceMatcher(None, tail_norm, new_norm).ratio()
+        if ratio >= 0.88:
+            return base_text
+
+    # If the chunk already exists near the end (not only at suffix), skip.
+    if new_norm:
+        base_tail_norm = _normalize_for_compare(" ".join(base_words[-max(120, len(new_words) * 2) :]))
+        if new_norm and new_norm in base_tail_norm:
+            return base_text
+
+    # Exact overlap on normalized words to append only delta.
+    base_norm_words = _normalize_for_compare(base_text).split()
+    new_norm_words = _normalize_for_compare(new_text).split()
+    if not base_norm_words or not new_norm_words:
+        return (base_text + " " + new_text).strip()
+
     max_k = min(max_overlap_words, len(base_words), len(new_words))
     overlap = 0
     for k in range(max_k, 0, -1):
-        if base_words[-k:] == new_words[:k]:
+        if base_norm_words[-k:] == new_norm_words[:k]:
             overlap = k
             break
 
@@ -420,6 +594,34 @@ def _normalize_for_compare(text: str) -> str:
     normalized = re.sub(r"[^\w\s]+", "", text.lower(), flags=re.UNICODE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
+
+
+def _build_dictation_preview(text: str, max_chars: int = 420) -> str:
+    compact = re.sub(r"\s+", " ", text.strip())
+    if not compact:
+        return ""
+    # Insert soft line breaks for readability in history cards.
+    words = compact.split()
+    lines: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for w in words:
+        add = len(w) + (1 if current else 0)
+        if current and current_len + add > 85:
+            lines.append(" ".join(current))
+            current = [w]
+            current_len = len(w)
+        else:
+            current.append(w)
+            current_len += add
+        if sum(len(line) for line in lines) + len(" ".join(current)) >= max_chars:
+            break
+    if current:
+        lines.append(" ".join(current))
+    preview = "\n".join(lines).strip()
+    if len(compact) > len(preview):
+        preview = preview.rstrip() + "..."
+    return preview
 
 
 async def _dictation_worker(websocket: WebSocket, session_id: str) -> None:
@@ -469,7 +671,10 @@ async def _finalize_dictation_save(session: DictationSession, session_id: str) -
         session,
         session.full_wav_path,
     )
-    final_text = text_full.strip() if text_full.strip() else session.final_text.strip()
+    if session.manual_text_override and session.final_text.strip():
+        final_text = session.final_text.strip()
+    else:
+        final_text = text_full.strip() if text_full.strip() else session.final_text.strip()
     session.final_text = final_text
 
     stt_meta = {
@@ -512,7 +717,7 @@ async def _finalize_dictation_save(session: DictationSession, session_id: str) -
     except Exception:
         pass
     try:
-        preview = final_text[:280].strip()
+        preview = _build_dictation_preview(final_text)
         add_dictation_history(
             db_path=INDEX_DB_PATH,
             job_id=job_id,
@@ -636,6 +841,13 @@ def download_file(job_id: str, which: str):
         "json": out_dir / "transcript.json",
     }
     path = mapping.get(which)
+    if which == "polished":
+        md = out_dir / "note_polished.md"
+        txt = out_dir / "transcript_polished.txt"
+        path = md if md.exists() else txt
+    if which == "polish_meta":
+        metas = sorted(out_dir.glob("polish_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        path = metas[0] if metas else None
     if not path or not path.exists():
         return JSONResponse({"error": "file not found"}, status_code=404)
     return FileResponse(str(path), filename=path.name)
@@ -818,6 +1030,146 @@ def delete_dictation_history(item_id: int) -> JSONResponse:
     return JSONResponse({"deleted": True, "id": item_id})
 
 
+@app.get("/api/ollama/models")
+def get_ollama_models() -> JSONResponse:
+    cfg = load_config("config.ini", init_if_missing=True)
+    healthy, reason = check_ollama_health(cfg)
+    if not healthy:
+        return JSONResponse(
+            {"ok": False, "error": f"Ollama недоступна: {reason}", "models": [], "default_model": cfg.summarize.model},
+            status_code=503,
+        )
+    try:
+        models = list_ollama_models(cfg)
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Не удалось получить список моделей: {exc}", "models": [], "default_model": cfg.summarize.model},
+            status_code=503,
+        )
+    return JSONResponse({"ok": True, "models": models, "default_model": cfg.summarize.model})
+
+
+@app.post("/api/ollama/pull/start")
+async def start_ollama_pull(request: Request) -> JSONResponse:
+    payload = await _read_polish_payload(request)
+    model = str(payload.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="Model is required")
+
+    pull_id = uuid.uuid4().hex[:12]
+    state = PullState(
+        id=pull_id,
+        model=model,
+        status="running",
+        message="starting",
+        done=False,
+        error=None,
+    )
+    OLLAMA_PULLS[pull_id] = state
+
+    async def _runner() -> None:
+        cfg = load_config("config.ini", init_if_missing=True)
+        cfg.summarize.model = model
+        try:
+            await asyncio.to_thread(
+                ensure_model_available,
+                cfg,
+                model,
+                900,
+                lambda msg: _set_pull_message(pull_id, str(msg)),
+            )
+            _set_pull_done(pull_id, "done")
+        except Exception as exc:
+            _set_pull_error(pull_id, str(exc))
+
+    asyncio.create_task(_runner())
+    return JSONResponse({"ok": True, "pull_id": pull_id, "model": model})
+
+
+@app.get("/api/ollama/pull/{pull_id}")
+def get_ollama_pull_status(pull_id: str) -> JSONResponse:
+    state = OLLAMA_PULLS.get(pull_id)
+    if not state:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(asdict(state))
+
+
+@app.post("/api/polish")
+async def polish_text(request: Request) -> JSONResponse:
+    payload = await _read_polish_payload(request)
+    job_id = str(payload.get("job_id") or "").strip()
+    source_text = str(payload.get("text") or "").strip()
+    preset = str(payload.get("preset") or "punct").strip().lower()
+    instruction = str(payload.get("instruction") or "").strip()
+    strict = _to_bool(payload.get("strict"), True)
+    save_as_file = _to_bool(payload.get("save_as_file"), False)
+    model_override = str(payload.get("ollama_model") or "").strip()
+
+    if preset not in ALLOWED_POLISH_PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unsupported preset: {preset}")
+    if not source_text:
+        raise HTTPException(status_code=400, detail="Text is empty")
+    if preset == "custom" and not instruction:
+        raise HTTPException(status_code=400, detail="Instruction is required for custom preset")
+
+    cfg = load_config("config.ini", init_if_missing=True)
+    if model_override:
+        cfg.summarize.model = model_override
+    healthy, reason = check_ollama_health(cfg)
+    if not healthy:
+        return JSONResponse(
+            {"ok": False, "error": f"Ollama недоступна: {reason}", "polished_text": "", "saved_path": None, "format": "text"},
+            status_code=503,
+        )
+
+    prompt = _build_polish_prompt(preset=preset, text=source_text, instruction=instruction, strict=strict)
+    num_predict = POLISH_NUM_PREDICT.get(preset, 350)
+
+    try:
+        polished_text = await asyncio.to_thread(
+            generate_text,
+            cfg,
+            prompt,
+            min(cfg.summarize.timeout_s, 180),
+            num_predict,
+            0.2,
+            0.9,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Ollama недоступна: {exc}", "polished_text": "", "saved_path": None, "format": "text"},
+            status_code=503,
+        )
+
+    saved_path: Optional[str] = None
+    out_format = "markdown" if _polish_is_markdown(preset, polished_text) else "text"
+    if save_as_file and job_id:
+        job = JOBS.get(job_id)
+        if not job or not job.output_dir:
+            raise HTTPException(status_code=404, detail="Job not found or not ready")
+        out_dir = Path(job.output_dir)
+        saved_path, out_format = _save_polish_result(
+            out_dir=out_dir,
+            polished_text=polished_text,
+            preset=preset,
+            instruction=instruction,
+            strict=strict,
+            model=cfg.summarize.model,
+            source_job_id=job_id,
+        )
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "polished_text": polished_text,
+            "saved_path": saved_path,
+            "format": out_format,
+            "model": cfg.summarize.model,
+            "download_url": f"/api/jobs/{job_id}/download/polished" if saved_path and job_id else None,
+        }
+    )
+
+
 @app.websocket("/ws/dictation")
 async def ws_dictation(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -901,6 +1253,7 @@ async def ws_dictation(websocket: WebSocket) -> None:
                     model=model,
                     model_device=model_device,
                     model_compute_type=model_compute_type,
+                    manual_text_override=False,
                     saved_once=False,
                     worker=None,
                 )
@@ -938,16 +1291,31 @@ async def ws_dictation(websocket: WebSocket) -> None:
             if command == "clear":
                 if session:
                     session.final_text = ""
+                    session.manual_text_override = False
                     session.saved_once = False
                     if session.webm_path.exists():
                         session.webm_path.write_bytes(b"")
                     await websocket.send_json({"type": "final", "text": ""})
                 continue
 
+            if command == "set_text":
+                if not session:
+                    await websocket.send_json({"type": "error", "message": "dictation not started"})
+                    continue
+                incoming = str(payload.get("text", "")).strip()
+                session.final_text = incoming
+                session.manual_text_override = bool(incoming)
+                await websocket.send_json({"type": "final", "text": session.final_text})
+                continue
+
             if command == "save":
                 if not session:
                     await websocket.send_json({"type": "error", "message": "dictation not started"})
                     continue
+                incoming = str(payload.get("text_override", "")).strip()
+                if incoming:
+                    session.final_text = incoming
+                    session.manual_text_override = True
                 await stop_worker()
                 await _save_dictation_session(websocket, session, session_id)
                 continue

@@ -190,6 +190,7 @@
           <button id="dictClear" class="btn btn-ghost" type="button">Clear</button>
           <button id="dictSave" class="btn btn-ghost" type="button">Save</button>
           <button id="dictCopy" class="btn btn-ghost" type="button">Copy</button>
+          <button id="polishFromDictation" class="btn btn-ghost" type="button">✨ AI</button>
         </div>
         <div class="meta-bar">
           <span id="dictState">State: idle</span>
@@ -200,7 +201,7 @@
         <div id="dictHint" class="hint"></div>
         <div class="dictation-live">
           <h3>Live text</h3>
-          <pre id="dictLiveText" class="preview-box"></pre>
+          <textarea id="dictLiveText" class="preview-box dict-live-edit" spellcheck="false"></textarea>
         </div>
         <div class="ask-result">
           <h3>История диктовки</h3>
@@ -214,6 +215,50 @@
       </section>
     </div>
   </main>
+
+  <div id="polishModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="polishTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="polishTitle">✨ AI</h2>
+        <button id="polishClose" class="btn btn-ghost" type="button">Закрыть</button>
+      </div>
+      <div class="modal-grid">
+        <div class="row">
+          <label for="polishPreset">Preset</label>
+          <select id="polishPreset">
+            <option value="punct">punct — пунктуация и ошибки</option>
+            <option value="clean">clean — убрать повторы/паразиты</option>
+            <option value="short">short — сжать в 5-7 строк</option>
+            <option value="task">task — 1-3 задачи</option>
+            <option value="obsidian">obsidian — заметка Markdown</option>
+            <option value="custom">custom — своя команда</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="polishModel">Модель Ollama</label>
+          <select id="polishModel"></select>
+        </div>
+      </div>
+      <div class="row row-single">
+        <label for="polishInstruction">Инструкция</label>
+        <textarea id="polishInstruction" rows="3" placeholder="Доп. уточнение или своя команда для custom"></textarea>
+      </div>
+      <div class="row row-single">
+        <label class="toggle-line"><input id="polishStrict" type="checkbox" checked> strict mode</label>
+      </div>
+      <div class="actions">
+        <button id="polishRun" class="btn btn-main" type="button">Run</button>
+      </div>
+      <div class="actions">
+        <button id="polishApply" class="btn btn-ghost" type="button">Вставить в Live text</button>
+      </div>
+      <div id="polishHint" class="hint"></div>
+      <div class="ask-result">
+        <h3>Результат</h3>
+        <div id="polishModalResult" class="preview-box rich-box"><p class="muted">Запустите обработку</p></div>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

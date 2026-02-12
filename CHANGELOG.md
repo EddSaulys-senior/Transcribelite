@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.11.1 - 2026-02-12
+
+- Dictation UX update:
+  - removed separate `Polished text` block from dictation tab
+  - `Live text` is now editable (`textarea`) for manual corrections
+  - polish modal now uses flow: `Run` -> `Вставить в Live text`
+  - removed polish modal actions `Save as file` and `Copy`
+- Dictation save now respects edited text:
+  - `Save` sends `text_override`
+  - backend `set_text` / `manual_text_override` keeps final edited text for export
+- Improved readability:
+  - live dictation text and polish result are auto-formatted into readable multi-line text
+  - dictation history preview is wrapped and displayed with preserved line breaks
+
+## 0.11.0 - 2026-02-12
+
+- Added new Polish Text flow (`✨ Привести в порядок`) in dictation tab (`Live text`).
+- Added backend endpoint: `POST /api/polish` (Ollama-only).
+  - presets: `punct`, `clean`, `short`, `task`, `obsidian`, `custom`
+  - supports `strict`, custom instruction, model override
+  - optional save to output folder as second file
+- Added polished output saving without overwriting original files:
+  - `transcript_polished.txt` or `note_polished.md`
+  - metadata file `polish_YYYYMMDD_HHMMSS.json`
+- Added Ollama model management API for UI:
+  - `GET /api/ollama/models`
+  - `POST /api/ollama/pull/start`
+  - `GET /api/ollama/pull/{pull_id}`
+- Added polished download alias endpoint support:
+  - `GET /api/jobs/{job_id}/download/polished`
+- Updated web UI:
+  - modal with preset/model/strict/instruction
+  - actions `Run`, `Save as file`, `Copy`
+  - per-tab `Polished text` preview block
+  - progress display while missing Ollama model is being pulled
+
 ## 0.10.2 - 2026-02-12
 
 - Added deletion of dictation history items with confirmation in UI.

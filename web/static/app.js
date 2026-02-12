@@ -12,6 +12,8 @@ let dictRecorder = null;
 let dictStream = null;
 let dictRunning = false;
 let dictLastJobId = null;
+let polishLastText = "";
+let polishLastResult = "";
 
 const STAGES = ["download", "ingest", "stt", "summarize", "export"];
 const THEME_KEY = "transcribelite_theme";
@@ -137,6 +139,37 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function formatReadableText(text) {
+  const src = String(text || "").trim();
+  if (!src) return "";
+
+  const normalized = src.replace(/\s+/g, " ").trim();
+  const sentenceBroken = normalized.replace(/([.!?])\s+/g, "$1\n");
+  const lines = sentenceBroken.split("\n");
+  const wrapped = [];
+
+  for (const line of lines) {
+    const words = line.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    let row = "";
+    for (const word of words) {
+      if (!row) {
+        row = word;
+        continue;
+      }
+      if ((row + " " + word).length > 110) {
+        wrapped.push(row);
+        row = word;
+      } else {
+        row += " " + word;
+      }
+    }
+    if (row) wrapped.push(row);
+  }
+
+  return wrapped.join("\n");
+}
+
 function renderBulletCard(elementId, items, fallbackText) {
   const node = $(elementId);
   if (!items || !items.length) {
@@ -170,6 +203,161 @@ function renderPreview(preview) {
 
   renderBulletCard("actionsCard", preview.action_items || [], "Action items не найдены");
   $("transcriptExcerpt").textContent = preview.transcript_excerpt || "";
+}
+
+function openPolishModal() {
+  polishLastText = ($("dictLiveText").value || "").trim();
+  $("polishModal").classList.remove("hidden");
+  $("polishHint").textContent = "";
+  $("polishModalResult").innerHTML = '<p class="muted">Запустите обработку</p>';
+  loadPolishModels();
+}
+
+function closePolishModal() {
+  $("polishModal").classList.add("hidden");
+}
+
+function getCurrentPolishJobId() {
+  return dictLastJobId || null;
+}
+
+async function loadPolishModels() {
+  const select = $("polishModel");
+  select.innerHTML = "";
+  const response = await fetch("/api/ollama/models");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    $("polishHint").textContent = payload.error || "Не удалось получить модели Ollama";
+    return;
+  }
+  const models = Array.isArray(payload.models) ? payload.models : [];
+  const fallback = payload.default_model || "";
+  if (!models.length && fallback) {
+    const opt = document.createElement("option");
+    opt.value = fallback;
+    opt.textContent = `${fallback} (not pulled)`;
+    select.appendChild(opt);
+    return;
+  }
+  models.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    if (name === fallback) opt.selected = true;
+    select.appendChild(opt);
+  });
+  if (fallback && !models.includes(fallback)) {
+    const opt = document.createElement("option");
+    opt.value = fallback;
+    opt.textContent = `${fallback} (not pulled)`;
+    opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+async function ensurePolishModel(model) {
+  const listResponse = await fetch("/api/ollama/models");
+  const listPayload = await listResponse.json();
+  if (listResponse.ok && listPayload.ok && Array.isArray(listPayload.models) && listPayload.models.includes(model)) {
+    return true;
+  }
+
+  $("polishHint").textContent = `Загружаю модель ${model}...`;
+  const startResponse = await fetch("/api/ollama/pull/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  const startPayload = await startResponse.json();
+  if (!startResponse.ok || !startPayload.pull_id) {
+    throw new Error(startPayload.detail || startPayload.error || "Не удалось начать загрузку модели");
+  }
+  const pullId = startPayload.pull_id;
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, 850));
+    const statusResponse = await fetch(`/api/ollama/pull/${pullId}`);
+    const statusPayload = await statusResponse.json();
+    if (!statusResponse.ok) throw new Error(statusPayload.detail || statusPayload.error || "Ошибка проверки загрузки модели");
+    $("polishHint").textContent = `Загрузка модели: ${statusPayload.message || "..."}`;
+    if (statusPayload.done) {
+      if (statusPayload.status === "error") {
+        throw new Error(statusPayload.error || "Загрузка модели завершилась ошибкой");
+      }
+      break;
+    }
+  }
+  await loadPolishModels();
+  return true;
+}
+
+async function runPolish() {
+  const preset = $("polishPreset").value;
+  const strict = $("polishStrict").checked;
+  const instruction = ($("polishInstruction").value || "").trim();
+  const model = ($("polishModel").value || "").trim();
+  const text = polishLastText;
+  const jobId = getCurrentPolishJobId();
+
+  if (!text) {
+    $("polishHint").textContent = "Нет текста для обработки";
+    return;
+  }
+  if (preset === "custom" && !instruction) {
+    $("polishHint").textContent = "Для custom заполните инструкцию";
+    return;
+  }
+
+  try {
+    await ensurePolishModel(model);
+  } catch (err) {
+    $("polishHint").textContent = String(err);
+    return;
+  }
+
+  $("polishHint").textContent = "Выполняю обработку...";
+  $("polishModalResult").innerHTML = '<p class="muted">Обработка...</p>';
+
+  const payload = {
+    job_id: jobId || "",
+    text,
+    preset,
+    instruction,
+    strict,
+    ollama_model: model,
+    save_as_file: false,
+  };
+  const response = await fetch("/api/polish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    $("polishHint").textContent = data.detail || data.error || "Ошибка polish";
+    $("polishModalResult").innerHTML = '<p class="muted">Ошибка обработки</p>';
+    return;
+  }
+
+  polishLastResult = data.polished_text || "";
+  $("polishModalResult").innerHTML = `<pre>${escapeHtml(formatReadableText(polishLastResult))}</pre>`;
+  $("polishHint").textContent = "Готово. Нажмите 'Вставить в Live text'.";
+}
+
+function syncDictTextToSession() {
+  const text = ($("dictLiveText").value || "").trim();
+  if (!text) return;
+  wsSendJson({ type: "set_text", text });
+}
+
+function applyPolishToLiveText() {
+  if (!polishLastResult.trim()) {
+    $("polishHint").textContent = "Сначала выполните Run";
+    return;
+  }
+  $("dictLiveText").value = formatReadableText(polishLastResult);
+  syncDictTextToSession();
+  $("polishHint").textContent = "Текст вставлен в Live text";
+  setDictHint("Live text обновлён из polish результата");
 }
 
 function renderSources(sources) {
@@ -351,7 +539,7 @@ function setupDictationWsHandlers() {
     } else if (t === "partial") {
       setDictHint("Transcribing...");
     } else if (t === "final") {
-      $("dictLiveText").textContent = payload.text || "";
+      $("dictLiveText").value = formatReadableText(payload.text || "");
     } else if (t === "stats") {
       $("dictRtf").textContent = `RTF: ${payload.rtf ?? "-"}`;
     } else if (t === "saved") {
@@ -449,7 +637,7 @@ function stopDictation() {
 }
 
 function clearDictation() {
-  $("dictLiveText").textContent = "";
+  $("dictLiveText").value = "";
   setDictHint("");
   setDictState("idle");
   hideDictDownloads();
@@ -461,12 +649,13 @@ function saveDictation() {
     setDictHint("Dictation WS not connected");
     return;
   }
-  wsSendJson({ type: "save" });
+  const text = ($("dictLiveText").value || "").trim();
+  wsSendJson({ type: "save", text_override: text });
   setDictHint("Saving...");
 }
 
 async function copyDictationText() {
-  const text = $("dictLiveText").textContent || "";
+  const text = $("dictLiveText").value || "";
   if (!text.trim()) return;
   try {
     await navigator.clipboard.writeText(text);
@@ -689,6 +878,19 @@ function initControls() {
   $("dictClear").addEventListener("click", clearDictation);
   $("dictSave").addEventListener("click", saveDictation);
   $("dictCopy").addEventListener("click", copyDictationText);
+  $("polishFromDictation").addEventListener("click", openPolishModal);
+  $("polishClose").addEventListener("click", closePolishModal);
+  $("polishRun").addEventListener("click", runPolish);
+  $("polishApply").addEventListener("click", applyPolishToLiveText);
+  $("polishPreset").addEventListener("change", () => {
+    const isCustom = $("polishPreset").value === "custom";
+    $("polishInstruction").placeholder = isCustom
+      ? "Опишите свою команду"
+      : "Доп. уточнение (необязательно)";
+  });
+  $("polishModal").addEventListener("click", (e) => {
+    if (e.target === $("polishModal")) closePolishModal();
+  });
   $("dictHistory").addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
