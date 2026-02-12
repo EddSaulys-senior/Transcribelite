@@ -199,7 +199,7 @@ def load_config(config_path: str | None = None, init_if_missing: bool = True) ->
         init_config(cfg_path)
 
     parser = _build_default_parser()
-    parser.read(cfg_path, encoding="utf-8")
+    parser.read(cfg_path, encoding="utf-8-sig")
     requested_profile = parser.get("profile", "active", fallback="custom").strip().lower()
     active_profile = _apply_profile_overrides(parser)
 

@@ -1,71 +1,85 @@
 # TranscribeLite
 
-Локальное Windows-приложение: `audio/video -> transcript -> optional summary (Ollama) -> export`.
+Local Windows app: `audio/video -> transcript -> optional local summary (Ollama) -> export`.
 
-## Что умеет
+## Screenshot
 
-- Windows 10/11
-- STT через `faster-whisper`
-- GPU (CUDA) при наличии, fallback при проблемах
-- Локальный summary только через Ollama (`/api/generate`)
-- Online/offline установка (через `wheels`)
-- Профили качества: `fast`, `balanced`, `quality`, `auto`
+![TranscribeLite Web UI](docs/images/web-ui.png)
 
-## Быстрый старт (online)
+## Quick Start (Online)
 
-1. Установить Python 3.11+.
-2. Установить зависимости:
-   - `scripts\install_online.bat`
-3. Проверить окружение:
-   - `scripts\doctor.bat`
-4. Запуск:
-   - `scripts\run.bat <file_or_folder>`
+1. Install Python 3.11+.
+2. Run `scripts\install_online.bat`.
+3. Run `scripts\doctor.bat`.
+4. Run `scripts\run.bat <file_or_folder>`.
 
-## Быстрый старт (offline)
+## Quick Start (Offline)
 
-На машине с интернетом:
+On internet PC:
 
-1. `scripts\build_wheels.bat`
-2. Скопировать проект вместе с папкой `wheels`.
+1. Run `scripts\build_wheels.bat`.
+2. Copy project folder with `wheels\`.
 
-На offline машине:
+On offline PC:
 
-1. `scripts\install_offline.bat`
-2. `scripts\run.bat <file_or_folder>`
+1. Install Python 3.11+.
+2. Run `scripts\install_offline.bat`.
+3. Run `scripts\run.bat <file_or_folder>`.
 
-## CLI
+## Web UI
 
-- `python -m transcribelite.app transcribe <file_or_folder>`
-- `python -m transcribelite.app doctor`
-- `python -m transcribelite.app config --init`
-- `python -m transcribelite.app --version`
+Run local web server:
 
-Переопределения на запуск:
+- `scripts\run_web.bat`
 
-- `--profile auto|fast|balanced|quality`
-- `--device cuda|cpu`
-- `--compute-type <value>`
-- `--model-name <name>`
-- `--no-summary`
+Then open:
 
-## Профили качества
+- `http://127.0.0.1:7860`
 
-Источник правды: `config.ini`.
+Web API behavior:
 
-### Ручной выбор
+- validates file extension (audio/video only)
+- validates profile: `auto|fast|balanced|quality`
+- enforces upload limit (1 GB)
+- removes temporary uploaded files after job completion
 
-В `config.ini`:
+## Portable Mode (Very Simple)
+
+If you want a copy that runs from a folder with no project setup:
+
+1. On source PC run `scripts\build_portable.bat`.
+2. Copy `portable_dist\TranscribeLite-Portable\` to target PC.
+3. Install and start Ollama on target PC.
+4. (If needed) pull model: `ollama pull llama3.1:8b`.
+5. Run `run_portable.bat <file_or_folder>` inside portable folder.
+6. Health check (optional): run `doctor_portable.bat` inside portable folder.
+
+Notes:
+
+- `build_portable.bat` uses `C:\Python311` by default.
+- You can override runtime source:
+  - `set PORTABLE_PYTHON_SRC=D:\MyPython311`
+  - then run `scripts\build_portable.bat`
+- If `config.ini` has a valid `ffmpeg_path`, ffmpeg is bundled into portable build automatically.
+- Portable output is in `portable_dist\TranscribeLite-Portable\output\`.
+- From project root you can run:
+  - `scripts\run_portable.bat <file_or_folder>`
+  - `scripts\doctor_portable.bat`
+
+## Profiles
+
+Config source: `config.ini`.
+
+Manual:
 
 ```ini
 [profile]
 active = quality
 ```
 
-Допустимые значения: `auto`, `fast`, `balanced`, `quality`.
+Values: `auto`, `fast`, `balanced`, `quality`.
 
-### Auto-режим
-
-В `config.ini`:
+Auto profile settings:
 
 ```ini
 [profile_auto]
@@ -76,48 +90,42 @@ medium_profile = balanced
 long_profile = fast
 ```
 
-Логика:
+CLI one-run override:
 
-- короткие файлы -> `short_profile`
-- средние -> `medium_profile`
-- длинные -> `long_profile`
+- `--profile auto|fast|balanced|quality`
 
-## Выходные файлы
+## CLI
 
-Для каждого входного файла создается:
+- `python -m transcribelite.app transcribe <file_or_folder>`
+- `python -m transcribelite.app doctor`
+- `python -m transcribelite.app config --init`
+- `python -m transcribelite.app --version`
+
+## Outputs
+
+For each input file:
 
 `output\<timestamp>_<name>\`
 
-Содержимое:
+Files:
 
 - `transcript.txt`
 - `transcript.json`
 - `note.md`
 
-`transcript.json` содержит метаданные запуска, включая:
+`transcript.json` includes run metadata:
 
 - `app_version`
 - `profile`
 - `requested_stt`
-- фактически использованные параметры STT
 
-## Версионирование и изменения
+## Versioning and Change Tracking
 
-- Версия приложения: `transcribelite.__version__`
-- История изменений: `CHANGELOG.md`
+- App version: `transcribelite.__version__`
+- Change log: `CHANGELOG.md`
 
-Правило проекта:
+Project rule:
 
-- При изменении параметров запуска, профилей, CLI-флагов или поведения pipeline обязательно обновлять:
+- If runtime behavior, launch params, profiles, or CLI flags change, update both:
   - `README.md`
   - `CHANGELOG.md`
-
-## Частые проблемы
-
-- `ffmpeg not found`:
-  - проверить `[paths] ffmpeg_path` в `config.ini`
-- `torch.cuda FAIL`:
-  - проверить драйвер NVIDIA и CUDA-совместимость
-- `ollama unavailable`:
-  - запустить Ollama и проверить `http://127.0.0.1:11434/api/tags`
-

@@ -38,6 +38,7 @@ wheels/*
 
 # Local test media
 Test_wav/
+portable_dist/
 
 # Local config overrides / backups
 *.bak

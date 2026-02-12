@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TranscribeLite Web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+  <div class="bg-grid"></div>
+  <canvas id="fx" class="fx-layer"></canvas>
+
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="kicker">LOCAL TRANSCRIPTION</p>
+        <h1>TranscribeLite Web</h1>
+        <p class="subtitle">Загрузи аудио или видео. Отслеживай этапы в реальном времени. Забери результат в один клик.</p>
+      </div>
+      <div class="pill">127.0.0.1 only</div>
+    </header>
+
+    <section class="grid">
+      <article class="card upload-card">
+        <h2>Новый запуск</h2>
+        <div id="drop" class="dropzone" tabindex="0">
+          <div class="drop-title">Перетащи файл сюда</div>
+          <div class="drop-sub">.wav .mp3 .m4a .mp4 .mkv ...</div>
+          <button id="pick" class="btn btn-ghost" type="button">Выбрать файл</button>
+          <input id="file" type="file" hidden>
+        </div>
+
+        <div class="row">
+          <label for="profile">Профиль</label>
+          <select id="profile">
+            <option value="auto" selected>auto</option>
+            <option value="fast">fast</option>
+            <option value="balanced">balanced</option>
+            <option value="quality">quality</option>
+          </select>
+        </div>
+
+        <div id="hint" class="hint"></div>
+        <button id="run" class="btn btn-main" type="button">Старт</button>
+      </article>
+
+      <article class="card status-card">
+        <h2>Статус</h2>
+        <div class="status-top">
+          <div>
+            <div id="status" class="status-text">Ожидание</div>
+            <div id="stage" class="stage-text">—</div>
+          </div>
+          <div id="jobid" class="jobid">—</div>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="progress-track">
+            <div id="bar" class="progress-bar"></div>
+            <div class="progress-glow"></div>
+          </div>
+        </div>
+
+        <ul class="timeline">
+          <li data-stage="ingest">ingest</li>
+          <li data-stage="stt">stt</li>
+          <li data-stage="summarize">summarize</li>
+          <li data-stage="export">export</li>
+        </ul>
+
+        <pre id="msg" class="logbox"></pre>
+
+        <div class="downloads">
+          <a id="dl_note" class="btn btn-ghost hidden" href="#">note.md</a>
+          <a id="dl_txt" class="btn btn-ghost hidden" href="#">transcript.txt</a>
+          <a id="dl_json" class="btn btn-ghost hidden" href="#">transcript.json</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="card preview-card">
+      <h2>Предпросмотр</h2>
+      <div class="preview-grid">
+        <div>
+          <h3>note.md</h3>
+          <pre id="note" class="preview-box"></pre>
+        </div>
+        <div>
+          <h3>transcript.txt</h3>
+          <pre id="transcript" class="preview-box"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
