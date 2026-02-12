@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Project runtime data (keep folders, ignore contents)
+cache/*
+logs/*
+output/*
+models/*
+wheels/*
+!cache/.gitkeep
+!logs/.gitkeep
+!output/.gitkeep
+!models/.gitkeep
+!wheels/.gitkeep
+
+# Local test media
+Test_wav/
+
+# Local config overrides / backups
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
