@@ -477,7 +477,7 @@ function renderTranscriptionHistory(items) {
       const title = escapeHtml(item.title || item.source_name || "Без названия");
       const jobId = escapeHtml(item.job_id || "");
       const itemId = Number(item.id || 0);
-      return `<div class="history-item"><p class="search-meta">#${jobId} · ${created}</p><p class="history-q">${title}</p><div class="history-actions"><a class="btn btn-ghost" href="/api/transcription/history/${jobId}/zip">Export ZIP</a><button class="btn btn-ghost trans-history-del-btn" type="button" data-id="${itemId}" title="Удалить запись и файлы">🗑</button></div></div>`;
+      return `<div class="history-item"><p class="search-meta">#${jobId} · ${created}</p><p class="history-q">${title}</p><div class="history-actions"><a class="btn btn-ghost" href="/api/transcription/history/${jobId}/zip">Экспорт ZIP</a><button class="btn btn-ghost trans-history-del-btn" type="button" data-id="${itemId}" title="Удалить запись и файлы">🗑</button></div></div>`;
     })
     .join("");
   node.innerHTML = html;
