@@ -17,6 +17,7 @@ let polishLastResult = "";
 
 const STAGES = ["download", "ingest", "stt", "summarize", "export"];
 const THEME_KEY = "transcribelite_theme";
+const MD_TAB_KEY = "transcribelite_md_tab";
 
 const $ = (id) => document.getElementById(id);
 
@@ -168,6 +169,43 @@ function formatReadableText(text) {
   }
 
   return wrapped.join("\n");
+}
+
+function safeMarkedParse(raw) {
+  const text = String(raw || "");
+  if (!window.marked) return escapeHtml(text).replaceAll("\n", "<br>");
+  window.marked.setOptions({
+    gfm: true,
+    breaks: true,
+    mangle: false,
+    headerIds: true,
+  });
+  const html = window.marked.parse(text);
+  if (window.DOMPurify) return window.DOMPurify.sanitize(html);
+  return html;
+}
+
+function renderMarkdownPreview() {
+  const source = $("live-md-source").textContent || "";
+  $("live-md-render").innerHTML = safeMarkedParse(source);
+}
+
+function setMdTab(mode) {
+  const isRender = mode === "render";
+  $("tab-source").classList.toggle("active", !isRender);
+  $("tab-render").classList.toggle("active", isRender);
+  $("live-md-source").classList.toggle("hidden", isRender);
+  $("live-md-render").classList.toggle("hidden", !isRender);
+  localStorage.setItem(MD_TAB_KEY, isRender ? "render" : "source");
+  if (isRender) renderMarkdownPreview();
+}
+
+function updateMarkdownPreviewFromLive() {
+  $("live-md-source").textContent = $("dictLiveText").value || "";
+  const mode = localStorage.getItem(MD_TAB_KEY) || "source";
+  if (mode === "render" && !$("live-md-render").classList.contains("hidden")) {
+    renderMarkdownPreview();
+  }
 }
 
 function renderBulletCard(elementId, items, fallbackText) {
@@ -354,7 +392,8 @@ function applyPolishToLiveText() {
     $("polishHint").textContent = "Сначала выполните Run";
     return;
   }
-  $("dictLiveText").value = formatReadableText(polishLastResult);
+  $("dictLiveText").value = polishLastResult;
+  updateMarkdownPreviewFromLive();
   syncDictTextToSession();
   $("polishHint").textContent = "Текст вставлен в Live text";
   setDictHint("Live text обновлён из polish результата");
@@ -540,6 +579,7 @@ function setupDictationWsHandlers() {
       setDictHint("Transcribing...");
     } else if (t === "final") {
       $("dictLiveText").value = formatReadableText(payload.text || "");
+      updateMarkdownPreviewFromLive();
     } else if (t === "stats") {
       $("dictRtf").textContent = `RTF: ${payload.rtf ?? "-"}`;
     } else if (t === "saved") {
@@ -638,6 +678,7 @@ function stopDictation() {
 
 function clearDictation() {
   $("dictLiveText").value = "";
+  updateMarkdownPreviewFromLive();
   setDictHint("");
   setDictState("idle");
   hideDictDownloads();
@@ -898,6 +939,11 @@ function initControls() {
     const id = Number(target.dataset.id || "0");
     deleteDictHistoryItem(id);
   });
+  $("dictLiveText").addEventListener("input", () => {
+    updateMarkdownPreviewFromLive();
+  });
+  $("tab-source").addEventListener("click", () => setMdTab("source"));
+  $("tab-render").addEventListener("click", () => setMdTab("render"));
 }
 
 function resizeFx() {
@@ -959,6 +1005,8 @@ function init() {
   switchTab("transcribe");
   hideDictDownloads();
   setTimeline("queued");
+  setMdTab(localStorage.getItem(MD_TAB_KEY) || "source");
+  updateMarkdownPreviewFromLive();
 }
 
 init();

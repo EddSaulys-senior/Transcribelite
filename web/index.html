@@ -204,6 +204,15 @@
           <textarea id="dictLiveText" class="preview-box dict-live-edit" spellcheck="false"></textarea>
         </div>
         <div class="ask-result">
+          <h3>Markdown Preview</h3>
+          <div class="md-preview-tabs">
+            <button id="tab-source" class="tab active" type="button">Исходник</button>
+            <button id="tab-render" class="tab" type="button">Результат (MD)</button>
+          </div>
+          <pre id="live-md-source" class="preview-box md-preview-box"></pre>
+          <div id="live-md-render" class="preview-box md-preview-box md-render hidden"></div>
+        </div>
+        <div class="ask-result">
           <h3>История диктовки</h3>
           <div id="dictHistory" class="preview-box rich-box"><p class="muted">История пока пуста</p></div>
         </div>
@@ -244,7 +253,7 @@
         <textarea id="polishInstruction" rows="3" placeholder="Доп. уточнение или своя команда для custom"></textarea>
       </div>
       <div class="row row-single">
-        <label class="toggle-line"><input id="polishStrict" type="checkbox" checked> strict mode</label>
+        <label class="toggle-line"><input id="polishStrict" type="checkbox" checked> Строго соблюдать</label>
       </div>
       <div class="actions">
         <button id="polishRun" class="btn btn-main" type="button">Run</button>
@@ -260,6 +269,9 @@
     </div>
   </div>
 
+  <!-- Markdown renderer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

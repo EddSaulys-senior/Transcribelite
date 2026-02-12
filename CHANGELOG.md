@@ -13,6 +13,11 @@
 - Improved readability:
   - live dictation text and polish result are auto-formatted into readable multi-line text
   - dictation history preview is wrapped and displayed with preserved line breaks
+- Added Markdown Preview in dictation tab:
+  - source/render tabs (`Исходник` / `Результат (MD)`)
+  - markdown rendering via `marked.js`
+  - HTML sanitization via `DOMPurify`
+  - selected tab is persisted in browser local storage
 
 ## 0.11.0 - 2026-02-12
 

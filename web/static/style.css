@@ -500,6 +500,85 @@ h3 {
   line-height: 1.45;
 }
 
+.md-preview-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tab {
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+
+.tab.active {
+  color: var(--ink);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.md-preview-box {
+  height: 280px;
+}
+
+.md-render {
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.md-render h1,
+.md-render h2,
+.md-render h3,
+.md-render h4 {
+  margin: 0.45em 0;
+  line-height: 1.25;
+}
+
+.md-render p,
+.md-render ul,
+.md-render ol,
+.md-render blockquote,
+.md-render pre {
+  margin: 0.5em 0;
+}
+
+.md-render ul,
+.md-render ol {
+  padding-left: 1.2em;
+}
+
+.md-render blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+  color: var(--ink-soft);
+}
+
+.md-render code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(16, 33, 58, 0.08);
+}
+
+.md-render pre {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(16, 33, 58, 0.08);
+  overflow: auto;
+}
+
+.md-render pre code {
+  padding: 0;
+  background: transparent;
+}
+
 .collapsible-card details {
   display: block;
 }
