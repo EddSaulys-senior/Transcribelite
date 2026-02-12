@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.2 - 2026-02-12
+
+- Added persistent Q&A history storage in local SQLite (`data/index.db`, table `qa_history`).
+- `/api/ask` now saves each successful Q&A record (job_id, question, answer, created_at).
+- Added endpoint `GET /api/qa/history` for restoring Q&A history after app restart.
+- Updated Web UI to load Q&A history from backend (not only in-memory session).
+- Made sections `🧠 Спроси у записи` and `🔎 Поиск по истории записей` collapsible.
+- Both sections are collapsed by default on page load.
+
+## 0.8.1 - 2026-02-12
+
+- Added Q&A history in Web UI (`🧠 Спроси у записи`) for current browser session.
+- Added global transcript search endpoint: `GET /api/search?q=...&limit=...`.
+- Added global search block in Web UI (`🔎 Поиск по истории записей`).
+- Global search now returns indexed snippets with job metadata (`job_id`, `title`, `created_at`, `chunk_id`).
+- Improved `/api/ask` response to include `job_id`.
+- Fixed Russian text encoding in Q&A backend error/fallback messages.
+
 ## 0.8.0 - 2026-02-12
 
 - Added feature "Ask the recording" (local Q&A per completed job) in Web UI.

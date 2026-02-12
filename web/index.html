@@ -122,21 +122,46 @@
       </div>
     </section>
 
-    <section class="card ask-card">
-      <h2>🧠 Спроси у записи</h2>
-      <div class="ask-row">
-        <textarea id="askQuestion" rows="3" placeholder="Например: Какие ключевые договорённости были в записи?"></textarea>
-        <button id="askRun" class="btn btn-main" type="button">Спросить</button>
-      </div>
-      <div id="askHint" class="hint"></div>
-      <div class="ask-result">
-        <h3>Ответ</h3>
-        <div id="askAnswer" class="preview-box rich-box"><p class="muted">Пока нет ответа</p></div>
-      </div>
-      <div class="ask-result">
-        <h3>Sources</h3>
-        <div id="askSources" class="preview-box rich-box"><p class="muted">Источники появятся после ответа</p></div>
-      </div>
+    <section class="card ask-card collapsible-card">
+      <details id="askPanel">
+        <summary>🧠 Спроси у записи</summary>
+        <div class="collapsible-body">
+          <div class="ask-row">
+            <textarea id="askQuestion" rows="3" placeholder="Например: Какие ключевые договорённости были в записи?"></textarea>
+            <button id="askRun" class="btn btn-main" type="button">Спросить</button>
+          </div>
+          <div id="askHint" class="hint"></div>
+          <div class="ask-result">
+            <h3>Ответ</h3>
+            <div id="askAnswer" class="preview-box rich-box"><p class="muted">Пока нет ответа</p></div>
+          </div>
+          <div class="ask-result">
+            <h3>Sources</h3>
+            <div id="askSources" class="preview-box rich-box"><p class="muted">Источники появятся после ответа</p></div>
+          </div>
+          <div class="ask-result">
+            <h3>История Q&A</h3>
+            <div id="askHistory" class="preview-box rich-box"><p class="muted">История пока пуста</p></div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section class="card search-card collapsible-card">
+      <details id="searchPanel">
+        <summary>🔎 Поиск по истории записей</summary>
+        <div class="collapsible-body">
+          <div class="ask-row">
+            <input id="globalSearchQuery" type="text" placeholder="Введите запрос по всем прошлым транскриптам">
+            <button id="globalSearchRun" class="btn btn-main" type="button">Найти</button>
+          </div>
+          <div id="globalSearchHint" class="hint"></div>
+          <div class="ask-result">
+            <h3>Результаты</h3>
+            <div id="globalSearchResults" class="preview-box rich-box"><p class="muted">Пока нет результатов</p></div>
+          </div>
+        </div>
+      </details>
     </section>
   </main>
 

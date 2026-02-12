@@ -422,6 +422,41 @@ h3 {
   margin-top: 16px;
 }
 
+.search-card {
+  margin-top: 16px;
+}
+
+.collapsible-card details {
+  display: block;
+}
+
+.collapsible-card summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.collapsible-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-card summary::after {
+  content: "▸";
+  float: right;
+  color: var(--ink-soft);
+  transition: transform 0.15s ease;
+}
+
+.collapsible-card details[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.collapsible-body {
+  margin-top: 12px;
+}
+
 .ask-row {
   display: grid;
   grid-template-columns: 1fr 180px;
@@ -437,6 +472,15 @@ h3 {
   line-height: 1.4;
   resize: vertical;
   min-height: 84px;
+  background: var(--bg-soft);
+  color: var(--ink);
+}
+
+.ask-row input[type="text"] {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
   background: var(--bg-soft);
   color: var(--ink);
 }
@@ -465,6 +509,49 @@ h3 {
 .source-text {
   margin-top: 8px;
   white-space: pre-wrap;
+}
+
+.history-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(16, 33, 58, 0.04);
+  padding: 8px 10px;
+}
+
+.history-item + .history-item {
+  margin-top: 8px;
+}
+
+.history-q {
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.history-a {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.search-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(16, 33, 58, 0.04);
+  padding: 8px 10px;
+}
+
+.search-item + .search-item {
+  margin-top: 8px;
+}
+
+.search-meta {
+  margin: 0 0 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.search-snippet {
+  margin: 0;
 }
 
 .rich-box {

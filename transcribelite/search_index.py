@@ -27,6 +27,15 @@ class GlobalChunkHit:
     output_dir: str
 
 
+@dataclass
+class QaHistoryItem:
+    id: int
+    job_id: str
+    question: str
+    answer: str
+    created_at: str
+
+
 def open_db(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -50,6 +59,17 @@ def open_db(db_path: Path) -> sqlite3.Connection:
             chunk_index UNINDEXED,
             text,
             tokenize='unicode61'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS qa_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -176,8 +196,8 @@ def search_global_chunks(db_path: Path, question: str, limit: int = 12) -> List[
                         m.output_dir
                     FROM chunks_fts AS f
                     LEFT JOIN meta AS m ON m.job_id = f.job_id
-                    WHERE f MATCH ?
-                    ORDER BY bm25(f)
+                    WHERE chunks_fts MATCH ?
+                    ORDER BY bm25(chunks_fts)
                     LIMIT ?
                     """,
                     (token_query, limit),
@@ -204,3 +224,46 @@ def search_global_chunks(db_path: Path, question: str, limit: int = 12) -> List[
                 if len(collected) >= limit:
                     return collected
     return collected
+
+
+def add_qa_history(
+    db_path: Path,
+    job_id: str,
+    question: str,
+    answer: str,
+    created_at: str,
+) -> int:
+    with open_db(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO qa_history(job_id, question, answer, created_at)
+            VALUES(?, ?, ?, ?)
+            """,
+            (job_id, question, answer, created_at),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def list_qa_history(db_path: Path, limit: int = 50) -> List[QaHistoryItem]:
+    limit = max(1, min(int(limit), 200))
+    with open_db(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, job_id, question, answer, created_at
+            FROM qa_history
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        QaHistoryItem(
+            id=int(row[0]),
+            job_id=str(row[1]),
+            question=str(row[2]),
+            answer=str(row[3]),
+            created_at=str(row[4]),
+        )
+        for row in rows
+    ]

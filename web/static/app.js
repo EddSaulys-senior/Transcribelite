@@ -6,6 +6,7 @@ let fx = null;
 let fxCtx = null;
 let sparks = [];
 let activeStage = "queued";
+let askHistory = [];
 
 const STAGES = ["download", "ingest", "stt", "summarize", "export"];
 const THEME_KEY = "transcribelite_theme";
@@ -170,9 +171,79 @@ function renderSources(sources) {
   node.innerHTML = html;
 }
 
+function renderAskHistory() {
+  const node = $("askHistory");
+  if (!askHistory.length) {
+    node.innerHTML = '<p class="muted">История пока пуста</p>';
+    return;
+  }
+
+  const html = askHistory
+    .map((item) => {
+      const q = escapeHtml(item.question);
+      const a = escapeHtml(item.answer);
+      const meta = `#${escapeHtml(item.job_id)} · ${escapeHtml((item.created_at || "").replace("T", " "))}`;
+      return `<div class="history-item"><p class="history-q">Q: ${q}</p><p class="history-a">A: ${a}</p><p class="search-meta">${meta}</p></div>`;
+    })
+    .join("");
+  node.innerHTML = html;
+}
+
+async function loadQaHistory() {
+  const response = await fetch("/api/qa/history?limit=50");
+  if (!response.ok) {
+    renderAskHistory();
+    return;
+  }
+  const payload = await response.json();
+  askHistory = Array.isArray(payload.items) ? payload.items : [];
+  renderAskHistory();
+}
+
+function renderGlobalResults(items) {
+  const node = $("globalSearchResults");
+  if (!items || !items.length) {
+    node.innerHTML = '<p class="muted">Ничего не найдено</p>';
+    return;
+  }
+
+  const html = items
+    .map((item) => {
+      const title = escapeHtml(item.title || "без названия");
+      const meta = `#${escapeHtml(item.job_id)} · ${escapeHtml(item.created_at || "")}`;
+      const snippet = escapeHtml(item.snippet || "");
+      return `<div class="search-item"><p class="search-meta">${title} · ${meta}</p><p class="search-snippet">${snippet}</p></div>`;
+    })
+    .join("");
+  node.innerHTML = html;
+}
+
+async function searchGlobalHistory() {
+  const query = $("globalSearchQuery").value.trim();
+  if (!query) {
+    $("globalSearchHint").textContent = "Введите текст для поиска.";
+    return;
+  }
+
+  $("globalSearchHint").textContent = "Ищем по всем записям...";
+  $("globalSearchResults").innerHTML = '<p class="muted">Поиск...</p>';
+
+  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=12`);
+  const payload = await response.json();
+
+  if (!response.ok) {
+    $("globalSearchHint").textContent = payload.detail || payload.error || "Ошибка поиска.";
+    $("globalSearchResults").innerHTML = '<p class="muted">Результаты недоступны</p>';
+    return;
+  }
+
+  $("globalSearchHint").textContent = `Найдено: ${(payload.items || []).length}`;
+  renderGlobalResults(payload.items || []);
+}
+
 async function askRecording() {
   const question = $("askQuestion").value.trim();
-  const activeJob = currentJobId || lastDoneJobId;
+  const activeJob = lastDoneJobId || currentJobId;
 
   if (!activeJob) {
     $("askHint").textContent = "Сначала завершите хотя бы одну транскрибацию.";
@@ -202,9 +273,12 @@ async function askRecording() {
     return;
   }
 
-  $("askHint").textContent = `Ответ по записи #${activeJob}`;
-  $("askAnswer").innerHTML = `<p>${escapeHtml(payload.answer || "В записи этого нет.")}</p>`;
+  const answer = payload.answer || "В записи этого нет.";
+  const jobForAnswer = payload.job_id || activeJob;
+  $("askHint").textContent = `Ответ по записи #${jobForAnswer}`;
+  $("askAnswer").innerHTML = `<p>${escapeHtml(answer)}</p>`;
   renderSources(payload.sources || []);
+  await loadQaHistory();
 }
 
 async function launchJob(response) {
@@ -340,6 +414,14 @@ function initControls() {
       askRecording();
     }
   });
+
+  $("globalSearchRun").addEventListener("click", searchGlobalHistory);
+  $("globalSearchQuery").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      searchGlobalHistory();
+    }
+  });
 }
 
 function resizeFx() {
@@ -396,6 +478,7 @@ function init() {
   initDnD();
   initControls();
   initFx();
+  loadQaHistory();
   setTimeline("queued");
 }
 

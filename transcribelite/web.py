@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -11,13 +11,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from transcribelite.config import load_config
 from transcribelite.pipeline.summarize_ollama import check_ollama_health, generate_text
+from transcribelite.search_index import add_qa_history
 from transcribelite.search_index import index_job as index_transcript_job
+from transcribelite.search_index import list_qa_history
 from transcribelite.search_index import search_chunks
+from transcribelite.search_index import search_global_chunks
 
 APP_DIR = Path(__file__).resolve().parent.parent
 UPLOADS_DIR = APP_DIR / "cache" / "uploads"
@@ -426,8 +429,56 @@ async def ask_recording(
         {"number": i + 1, "chunk_id": hit.chunk_id, "text": _short_source_text(hit.text)}
         for i, hit in enumerate(sources)
     ]
-    return JSONResponse({"answer": answer, "sources": response_sources})
+    created_at = datetime.now().isoformat(timespec="seconds")
+    try:
+        add_qa_history(
+            db_path=INDEX_DB_PATH,
+            job_id=job_id,
+            question=question,
+            answer=answer,
+            created_at=created_at,
+        )
+    except Exception:
+        pass
 
+    return JSONResponse({"job_id": job_id, "answer": answer, "sources": response_sources})
+
+
+@app.get("/api/search")
+def search_history(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(12, ge=1, le=30),
+) -> JSONResponse:
+    hits = search_global_chunks(INDEX_DB_PATH, question=q, limit=limit)
+    items = [
+        {
+            "job_id": hit.job_id,
+            "title": hit.title,
+            "created_at": hit.created_at,
+            "chunk_id": hit.chunk_id,
+            "chunk_index": hit.chunk_index,
+            "snippet": _short_source_text(hit.text, max_chars=280),
+            "output_dir": hit.output_dir,
+        }
+        for hit in hits
+    ]
+    return JSONResponse({"query": q, "items": items})
+
+
+@app.get("/api/qa/history")
+def get_qa_history(limit: int = Query(50, ge=1, le=200)) -> JSONResponse:
+    history = list_qa_history(INDEX_DB_PATH, limit=limit)
+    items = [
+        {
+            "id": item.id,
+            "job_id": item.job_id,
+            "question": item.question,
+            "answer": item.answer,
+            "created_at": item.created_at,
+        }
+        for item in history
+    ]
+    return JSONResponse({"items": items})
 
 async def run_transcribe_job(job_id: str, input_path: Path) -> None:
     job = JOBS[job_id]
@@ -575,3 +626,4 @@ async def run_download_and_transcribe_job(job_id: str, url: str) -> None:
         job.progress = 1.0
         job.error = str(exc)
         job.message = "Error"
+
