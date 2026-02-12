@@ -30,11 +30,13 @@ logs/*
 output/*
 models/*
 wheels/*
+data/*
 !cache/.gitkeep
 !logs/.gitkeep
 !output/.gitkeep
 !models/.gitkeep
 !wheels/.gitkeep
+!data/.gitkeep
 
 # Local test media
 Test_wav/

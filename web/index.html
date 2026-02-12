@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
@@ -20,9 +20,12 @@
       <div>
         <p class="kicker">LOCAL TRANSCRIPTION</p>
         <h1>TranscribeLite Web</h1>
-        <p class="subtitle">Загрузи аудио или видео. Отслеживай этапы в реальном времени. Забери результат в один клик.</p>
+        <p class="subtitle">Загрузи аудио/видео или вставь ссылку из интернета. Следи за этапами в реальном времени и забирай результат в один клик.</p>
       </div>
-      <div class="pill">127.0.0.1 only</div>
+      <div class="hero-actions">
+        <button id="themeToggle" class="btn btn-ghost theme-toggle" type="button" aria-label="Переключить тему">🌙 Тёмная тема</button>
+        <div class="pill">127.0.0.1 only</div>
+      </div>
     </header>
 
     <section class="grid">
@@ -45,8 +48,16 @@
           </select>
         </div>
 
+        <div class="row row-url">
+          <label for="urlInput">Ссылка</label>
+          <input id="urlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+        </div>
+
         <div id="hint" class="hint"></div>
-        <button id="run" class="btn btn-main" type="button">Старт</button>
+        <div class="actions">
+          <button id="run" class="btn btn-main" type="button">Старт по файлу</button>
+          <button id="runUrl" class="btn btn-ghost" type="button">Старт по ссылке</button>
+        </div>
       </article>
 
       <article class="card status-card">
@@ -67,6 +78,7 @@
         </div>
 
         <ul class="timeline">
+          <li data-stage="download">download</li>
           <li data-stage="ingest">ingest</li>
           <li data-stage="stt">stt</li>
           <li data-stage="summarize">summarize</li>
@@ -85,15 +97,45 @@
 
     <section class="card preview-card">
       <h2>Предпросмотр</h2>
-      <div class="preview-grid">
+      <div id="metaBar" class="meta-bar">
+        <span id="metaDate">Дата: —</span>
+        <span id="metaModel">Модель: —</span>
+        <span id="metaDevice">Устройство: —</span>
+      </div>
+      <div class="preview-grid preview-rich">
         <div>
-          <h3>note.md</h3>
-          <pre id="note" class="preview-box"></pre>
+          <h3>Summary</h3>
+          <div id="summaryCard" class="preview-box rich-box">
+            <p class="muted">Нет данных</p>
+          </div>
         </div>
         <div>
-          <h3>transcript.txt</h3>
-          <pre id="transcript" class="preview-box"></pre>
+          <h3>Action items</h3>
+          <div id="actionsCard" class="preview-box rich-box">
+            <p class="muted">Нет данных</p>
+          </div>
         </div>
+      </div>
+      <div class="preview-transcript">
+        <h3>Transcript (фрагмент)</h3>
+        <pre id="transcriptExcerpt" class="preview-box"></pre>
+      </div>
+    </section>
+
+    <section class="card ask-card">
+      <h2>🧠 Спроси у записи</h2>
+      <div class="ask-row">
+        <textarea id="askQuestion" rows="3" placeholder="Например: Какие ключевые договорённости были в записи?"></textarea>
+        <button id="askRun" class="btn btn-main" type="button">Спросить</button>
+      </div>
+      <div id="askHint" class="hint"></div>
+      <div class="ask-result">
+        <h3>Ответ</h3>
+        <div id="askAnswer" class="preview-box rich-box"><p class="muted">Пока нет ответа</p></div>
+      </div>
+      <div class="ask-result">
+        <h3>Sources</h3>
+        <div id="askSources" class="preview-box rich-box"><p class="muted">Источники появятся после ответа</p></div>
       </div>
     </section>
   </main>

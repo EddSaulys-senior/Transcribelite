@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -41,12 +41,29 @@ def check_ollama_health(cfg: AppConfig) -> Tuple[bool, str]:
         return False, str(exc)
 
 
-def _generate_once(cfg: AppConfig, prompt: str) -> str:
-    payload = {"model": cfg.summarize.model, "prompt": prompt, "stream": False}
+def generate_text(
+    cfg: AppConfig,
+    prompt: str,
+    timeout_s: Optional[int] = None,
+    num_predict: Optional[int] = None,
+    temperature: Optional[float] = None,
+) -> str:
+    options = {}
+    if num_predict is not None:
+        options["num_predict"] = int(num_predict)
+    if temperature is not None:
+        options["temperature"] = float(temperature)
+
+    payload = {
+        "model": cfg.summarize.model,
+        "prompt": prompt,
+        "stream": False,
+        "options": options,
+    }
     data = request_json(
         "POST",
         f"{cfg.summarize.ollama_url}/api/generate",
-        timeout_s=cfg.summarize.timeout_s,
+        timeout_s=timeout_s or cfg.summarize.timeout_s,
         retries=1,
         json=payload,
     )
@@ -76,7 +93,7 @@ def summarize_text(transcript: str, cfg: AppConfig) -> Tuple[Optional[str], Opti
         chunk_summaries: List[str] = []
         for chunk in chunks:
             prompt = _render_prompt(template, chunk)
-            chunk_summaries.append(_generate_once(cfg, prompt))
+            chunk_summaries.append(generate_text(cfg, prompt))
         if len(chunk_summaries) == 1:
             return chunk_summaries[0], None
 
@@ -86,7 +103,6 @@ def summarize_text(transcript: str, cfg: AppConfig) -> Tuple[Optional[str], Opti
                 f"Summary chunk {i + 1}:\n{summary}" for i, summary in enumerate(chunk_summaries)
             ),
         )
-        return _generate_once(cfg, final_prompt), None
+        return generate_text(cfg, final_prompt), None
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
-

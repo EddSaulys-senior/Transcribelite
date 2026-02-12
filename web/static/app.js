@@ -1,12 +1,14 @@
-let selectedFile = null;
+﻿let selectedFile = null;
 let currentJobId = null;
+let lastDoneJobId = null;
 let pollTimer = null;
 let fx = null;
 let fxCtx = null;
 let sparks = [];
 let activeStage = "queued";
 
-const STAGES = ["ingest", "stt", "summarize", "export"];
+const STAGES = ["download", "ingest", "stt", "summarize", "export"];
+const THEME_KEY = "transcribelite_theme";
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,32 +57,162 @@ function showDownloads(jobId) {
   $("dl_json").classList.remove("hidden");
 }
 
-async function startJob() {
-  if (!selectedFile) {
-    setHint("Сначала выберите файл.");
+function hideDownloads() {
+  $("dl_note").classList.add("hidden");
+  $("dl_txt").classList.add("hidden");
+  $("dl_json").classList.add("hidden");
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const btn = $("themeToggle");
+  if (!btn) return;
+  btn.textContent = theme === "dark" ? "☀️ Светлая тема" : "🌙 Тёмная тема";
+}
+
+function detectSystemTheme() {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  applyTheme(saved || detectSystemTheme());
+
+  $("themeToggle").addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme") || "light";
+    const next = current === "dark" ? "light" : "dark";
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+  });
+}
+
+function resetBeforeStart(stage = "ingest") {
+  setHint("");
+  setStatus("Подготовка...");
+  setStage(stage);
+  setMsg("");
+  setBar(0.02);
+  setTimeline(stage);
+  hideDownloads();
+
+  $("summaryCard").innerHTML = '<p class="muted">Нет данных</p>';
+  $("actionsCard").innerHTML = '<p class="muted">Нет данных</p>';
+  $("transcriptExcerpt").textContent = "";
+  $("metaDate").textContent = "Дата: —";
+  $("metaModel").textContent = "Модель: —";
+  $("metaDevice").textContent = "Устройство: —";
+
+  $("askAnswer").innerHTML = '<p class="muted">Пока нет ответа</p>';
+  $("askSources").innerHTML = '<p class="muted">Источники появятся после ответа</p>';
+  $("askHint").textContent = "";
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderBulletCard(elementId, items, fallbackText) {
+  const node = $(elementId);
+  if (!items || !items.length) {
+    node.innerHTML = `<p class="muted">${escapeHtml(fallbackText)}</p>`;
+    return;
+  }
+  const html = items.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  node.innerHTML = `<ul>${html}</ul>`;
+}
+
+function renderPreview(preview) {
+  const meta = preview.meta || {};
+  const metaDate = meta.created_at ? meta.created_at.replace("T", " ") : "—";
+  const model = meta.stt_model || "—";
+  const device = [meta.device || "—", meta.compute_type || ""].filter(Boolean).join(" / ");
+
+  $("metaDate").textContent = `Дата: ${metaDate}`;
+  $("metaModel").textContent = `Модель: ${model}`;
+  $("metaDevice").textContent = `Устройство: ${device}`;
+
+  if (preview.summary_status === "skipped") {
+    const reason = preview.summary_error || "summary skipped";
+    $("summaryCard").innerHTML = `<p class="muted">Summary пропущен: ${escapeHtml(reason)}</p>`;
+  } else if (preview.summary_points?.length) {
+    renderBulletCard("summaryCard", preview.summary_points, "Нет summary");
+  } else if (preview.summary_text) {
+    $("summaryCard").innerHTML = `<p>${escapeHtml(preview.summary_text)}</p>`;
+  } else {
+    $("summaryCard").innerHTML = '<p class="muted">Нет summary</p>';
+  }
+
+  renderBulletCard("actionsCard", preview.action_items || [], "Action items не найдены");
+  $("transcriptExcerpt").textContent = preview.transcript_excerpt || "";
+}
+
+function renderSources(sources) {
+  const node = $("askSources");
+  if (!sources || !sources.length) {
+    node.innerHTML = '<p class="muted">Источники не найдены</p>';
     return;
   }
 
-  setHint("");
-  setStatus("Загрузка...");
-  setStage("upload");
-  setMsg("");
-  setBar(0.02);
-  setTimeline("ingest");
-  hideDownloads();
-  $("note").textContent = "";
-  $("transcript").textContent = "";
+  const html = sources
+    .map((src) => {
+      const num = escapeHtml(src.number);
+      const chunkId = escapeHtml(src.chunk_id);
+      const text = escapeHtml(src.text || "");
+      return `<details class="source-item"><summary>[${num}] chunk #${chunkId}</summary><div class="source-text">${text}</div></details>`;
+    })
+    .join("");
+
+  node.innerHTML = html;
+}
+
+async function askRecording() {
+  const question = $("askQuestion").value.trim();
+  const activeJob = currentJobId || lastDoneJobId;
+
+  if (!activeJob) {
+    $("askHint").textContent = "Сначала завершите хотя бы одну транскрибацию.";
+    return;
+  }
+  if (!question) {
+    $("askHint").textContent = "Введите вопрос.";
+    return;
+  }
+
+  $("askHint").textContent = "Ищем по записи...";
+  $("askAnswer").innerHTML = '<p class="muted">Формируем ответ...</p>';
+  $("askSources").innerHTML = '<p class="muted">Подбираем источники...</p>';
 
   const fd = new FormData();
-  fd.append("file", selectedFile);
-  fd.append("profile", $("profile").value);
+  fd.append("job_id", activeJob);
+  fd.append("question", question);
+  fd.append("limit", "6");
 
-  const response = await fetch("/api/jobs", { method: "POST", body: fd });
+  const response = await fetch("/api/ask", { method: "POST", body: fd });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    $("askHint").textContent = payload.detail || payload.error || "Ошибка запроса.";
+    $("askAnswer").innerHTML = '<p class="muted">Ответ не получен</p>';
+    $("askSources").innerHTML = '<p class="muted">Источники не получены</p>';
+    return;
+  }
+
+  $("askHint").textContent = `Ответ по записи #${activeJob}`;
+  $("askAnswer").innerHTML = `<p>${escapeHtml(payload.answer || "В записи этого нет.")}</p>`;
+  renderSources(payload.sources || []);
+}
+
+async function launchJob(response) {
   const payload = await response.json();
   if (!response.ok) {
     setStatus("error");
     setStage("error");
-    setMsg(payload.detail || payload.error || "Upload failed");
+    setMsg(payload.detail || payload.error || "Ошибка запуска");
     setBar(1);
     return;
   }
@@ -93,10 +225,39 @@ async function startJob() {
   await pollJob();
 }
 
-function hideDownloads() {
-  $("dl_note").classList.add("hidden");
-  $("dl_txt").classList.add("hidden");
-  $("dl_json").classList.add("hidden");
+async function startFileJob() {
+  if (!selectedFile) {
+    setHint("Сначала выберите файл.");
+    return;
+  }
+
+  resetBeforeStart("ingest");
+  setStatus("Загрузка файла...");
+
+  const fd = new FormData();
+  fd.append("file", selectedFile);
+  fd.append("profile", $("profile").value);
+
+  const response = await fetch("/api/jobs", { method: "POST", body: fd });
+  await launchJob(response);
+}
+
+async function startUrlJob() {
+  const url = $("urlInput").value.trim();
+  if (!url) {
+    setHint("Вставьте ссылку, например YouTube.");
+    return;
+  }
+
+  resetBeforeStart("download");
+  setStatus("Проверка ссылки...");
+
+  const fd = new FormData();
+  fd.append("url", url);
+  fd.append("profile", $("profile").value);
+
+  const response = await fetch("/api/jobs/from-url", { method: "POST", body: fd });
+  await launchJob(response);
 }
 
 async function pollJob() {
@@ -122,11 +283,11 @@ async function pollJob() {
     clearInterval(pollTimer);
     showDownloads(currentJobId);
     celebrate();
+    lastDoneJobId = currentJobId;
 
     const previewResponse = await fetch(`/api/jobs/${currentJobId}/preview`);
     const preview = await previewResponse.json();
-    $("note").textContent = preview.note_md || "";
-    $("transcript").textContent = preview.transcript || "";
+    renderPreview(preview);
   }
 
   if (job.status === "error") {
@@ -164,7 +325,21 @@ function initControls() {
     selectedFile = e.target.files?.[0] || null;
     setHint(selectedFile ? `Файл: ${selectedFile.name}` : "");
   });
-  $("run").addEventListener("click", startJob);
+  $("run").addEventListener("click", startFileJob);
+  $("runUrl").addEventListener("click", startUrlJob);
+  $("urlInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      startUrlJob();
+    }
+  });
+  $("askRun").addEventListener("click", askRecording);
+  $("askQuestion").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      askRecording();
+    }
+  });
 }
 
 function resizeFx() {
@@ -211,12 +386,13 @@ function celebrate() {
       r: 1.8 + Math.random() * 2.2,
       life: 36 + Math.random() * 36,
       maxLife: 72,
-      c: Math.random() > 0.5 ? "14, 165, 233" : "34, 197, 94",
+      c: Math.random() > 0.5 ? "56, 189, 248" : "34, 211, 238",
     });
   }
 }
 
 function init() {
+  initTheme();
   initDnD();
   initControls();
   initFx();
