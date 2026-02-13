@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from transcribelite.config import load_config
 from transcribelite.pipeline.export import export_outputs
@@ -159,6 +159,11 @@ def _resolve_python_executable() -> str:
     if venv_python.exists():
         return str(venv_python)
     return sys.executable
+
+
+@app.get("/favicon.ico")
+def favicon() -> RedirectResponse:
+    return RedirectResponse(url="/static/favicon.svg")
 
 
 def _trim_jobs() -> None:

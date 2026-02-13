@@ -818,6 +818,40 @@ h3 {
   color: var(--ink);
 }
 
+.app-footer {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.app-footer-text strong {
+  color: var(--ink);
+}
+
+.app-footer-dot {
+  color: var(--ink-soft);
+  opacity: 0.8;
+}
+
+.app-footer-link {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.app-footer-link:hover {
+  text-decoration: underline;
+}
+
 :root[data-theme="dark"] .orb-a {
   background: radial-gradient(circle at 30% 30%, #0ea5e9, #1d4ed8 60%, transparent 100%);
 }
@@ -862,5 +896,13 @@ h3 {
   .hero-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .app-footer {
+    justify-content: flex-start;
+  }
+
+  .app-footer-dot {
+    display: none;
   }
 }
