@@ -10,7 +10,7 @@ import subprocess
 import sys
 import uuid
 import zipfile
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -278,6 +278,22 @@ def _safe_slug(value: str, max_len: int = 64) -> str:
     if len(slug) > max_len:
         slug = slug[:max_len].rstrip("_")
     return slug or "transcription"
+
+
+def _ascii_filename(value: str, max_len: int = 120) -> str:
+    cleaned = str(value or "").strip().replace("\r", " ").replace("\n", " ")
+    cleaned = cleaned.encode("ascii", "ignore").decode("ascii")
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", cleaned).strip("._")
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip("._")
+    return cleaned or "download.zip"
+
+
+def _build_content_disposition(filename: str) -> str:
+    cleaned = str(filename or "").strip().replace("\r", " ").replace("\n", " ")
+    fallback = _ascii_filename(cleaned)
+    encoded = quote(cleaned, safe="")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _build_transcription_zip(output_dir: Path) -> bytes:
@@ -1105,7 +1121,7 @@ def download_transcription_zip(job_id: str):
     if ts_raw:
         ts = re.sub(r"[^0-9]", "", ts_raw)[:14] or ts
     filename = f"{_safe_slug(title)}_{ts}.zip"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    headers = {"Content-Disposition": _build_content_disposition(filename)}
     return StreamingResponse(io.BytesIO(payload), media_type="application/zip", headers=headers)
 
 

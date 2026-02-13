@@ -974,6 +974,23 @@ function initControls() {
   $("dictCopy").addEventListener("click", copyDictationText);
   $("polishFromDictation").addEventListener("click", openPolishModal);
   $("polishClose").addEventListener("click", closePolishModal);
+  const polishModal = $("polishModal");
+  const polishCard = polishModal?.querySelector(".modal-card");
+  polishModal?.addEventListener("click", (e) => {
+    if (e.target === polishModal) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+  polishCard?.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (polishModal?.classList.contains("hidden")) return;
+    e.preventDefault();
+    closePolishModal();
+  });
   $("polishRun").addEventListener("click", runPolish);
   $("polishApply").addEventListener("click", applyPolishToLiveText);
   $("polishPreset").addEventListener("change", () => {
@@ -981,9 +998,6 @@ function initControls() {
     $("polishInstruction").placeholder = isCustom
       ? "Опишите свою команду"
       : "Доп. уточнение (необязательно)";
-  });
-  $("polishModal").addEventListener("click", (e) => {
-    if (e.target === $("polishModal")) closePolishModal();
   });
   $("dictHistory").addEventListener("click", (e) => {
     const target = e.target;
