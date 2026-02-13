@@ -475,6 +475,26 @@ h3 {
   color: var(--ink);
 }
 
+.dictation-summary-help {
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.dict-toggle-btn.recording {
+  background: linear-gradient(135deg, #ef4444, #f87171);
+  color: #fff;
+  border: none;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.36), 0 8px 18px rgba(239, 68, 68, 0.24);
+  animation: recPulse 1.3s infinite;
+}
+
+.dict-toggle-btn.stopping {
+  background: linear-gradient(135deg, #f97316, #fb923c);
+  color: #fff;
+  border: none;
+}
+
 .toggle-line {
   display: inline-flex;
   align-items: center;
@@ -869,6 +889,12 @@ h3 {
 @keyframes sheen {
   0% { transform: translateX(-120%); }
   100% { transform: translateX(160%); }
+}
+
+@keyframes recPulse {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.75); }
+  70% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
 @media (max-width: 980px) {

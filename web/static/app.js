@@ -14,6 +14,9 @@ let dictRunning = false;
 let dictLastJobId = null;
 let polishLastText = "";
 let polishLastResult = "";
+let polishPresets = [];
+let ollamaCloudKeyMissing = false;
+let ollamaCloudKeyEnv = "OLLAMA_API_KEY";
 
 const STAGES = ["download", "ingest", "stt", "summarize", "export"];
 const THEME_KEY = "transcribelite_theme";
@@ -171,6 +174,24 @@ function formatReadableText(text) {
   return wrapped.join("\n");
 }
 
+function normalizePolishMarkdown(text) {
+  let out = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!out) return "";
+  // Ensure markdown headings always start from a new paragraph.
+  out = out.replace(/[ \t]*\n?[ \t]*(#{1,6}\s+)/g, (m, h, offset) => {
+    if (offset === 0) return `${h}`;
+    return `\n\n${h}`;
+  });
+  out = out.replace(/\n{3,}/g, "\n\n").trim();
+  return out;
+}
+
+function looksLikeMarkdown(text) {
+  const src = String(text || "");
+  if (!src.trim()) return false;
+  return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```)/m.test(src);
+}
+
 function safeMarkedParse(raw) {
   const text = String(raw || "");
   if (!window.marked) return escapeHtml(text).replaceAll("\n", "<br>");
@@ -248,6 +269,7 @@ function openPolishModal() {
   $("polishModal").classList.remove("hidden");
   $("polishHint").textContent = "";
   $("polishModalResult").innerHTML = '<p class="muted">Запустите обработку</p>';
+  loadPolishPresets();
   loadPolishModels();
 }
 
@@ -259,43 +281,124 @@ function getCurrentPolishJobId() {
   return dictLastJobId || null;
 }
 
+function updatePolishInstructionPlaceholder() {
+  const isCustom = $("polishPreset").value === "custom";
+  $("polishInstruction").placeholder = isCustom
+    ? "Опишите свою команду"
+    : "Доп. уточнение (необязательно)";
+}
+
+function updatePolishCloudHint() {
+  const model = ($("polishModel").value || "").trim();
+  if (model.endsWith("-cloud") && ollamaCloudKeyMissing) {
+    $("polishHint").textContent = `Set ${ollamaCloudKeyEnv} env var`;
+    return;
+  }
+  if (($("polishHint").textContent || "").startsWith("Set ")) {
+    $("polishHint").textContent = "";
+  }
+}
+
+async function loadPolishPresets() {
+  const select = $("polishPreset");
+  const current = select.value;
+  select.innerHTML = "";
+
+  const response = await fetch("/api/polish/presets");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok || !Array.isArray(payload.items)) {
+    $("polishHint").textContent = payload.error || "Не удалось получить список промптов";
+    return;
+  }
+
+  polishPresets = payload.items;
+  payload.items.forEach((item) => {
+    const opt = document.createElement("option");
+    opt.value = item.id;
+    opt.textContent = item.title || item.id;
+    if (current && current === item.id) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  if (!select.value && select.options.length) {
+    const defaultPreset = payload.items.find((x) => x.id === "punct") || payload.items[0];
+    select.value = defaultPreset.id;
+  }
+  updatePolishInstructionPlaceholder();
+}
+
 async function loadPolishModels() {
   const select = $("polishModel");
+  const previous = select.value;
   select.innerHTML = "";
   const response = await fetch("/api/ollama/models");
   const payload = await response.json();
+  ollamaCloudKeyEnv = payload.cloud_key_env || "OLLAMA_API_KEY";
+  ollamaCloudKeyMissing = Boolean(payload.cloud_key_missing);
   if (!response.ok || !payload.ok) {
     $("polishHint").textContent = payload.error || "Не удалось получить модели Ollama";
     return;
   }
+  const items = Array.isArray(payload.items) ? payload.items : [];
   const models = Array.isArray(payload.models) ? payload.models : [];
   const fallback = payload.default_model || "";
-  if (!models.length && fallback) {
+  if (!items.length && fallback) {
     const opt = document.createElement("option");
     opt.value = fallback;
     opt.textContent = `${fallback} (not pulled)`;
     select.appendChild(opt);
     return;
   }
-  models.forEach((name) => {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    if (name === fallback) opt.selected = true;
-    select.appendChild(opt);
-  });
-  if (fallback && !models.includes(fallback)) {
+  if (items.length) {
+    items.forEach((item) => {
+      const name = String(item.name || "").trim();
+      if (!name) return;
+      const cloud = Boolean(item.is_cloud) || name.endsWith("-cloud");
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = cloud ? `${name} (cloud)` : name;
+      if (previous && previous === name) opt.selected = true;
+      if (!previous && name === fallback) opt.selected = true;
+      select.appendChild(opt);
+    });
+  } else {
+    models.forEach((name) => {
+      const cloud = String(name || "").endsWith("-cloud");
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = cloud ? `${name} (cloud)` : name;
+      if (name === fallback) opt.selected = true;
+      select.appendChild(opt);
+    });
+  }
+  if (previous && !Array.from(select.options).some((o) => o.value === previous) && fallback) {
     const opt = document.createElement("option");
     opt.value = fallback;
     opt.textContent = `${fallback} (not pulled)`;
     opt.selected = true;
     select.appendChild(opt);
   }
+  if (!select.value && fallback && !models.includes(fallback)) {
+    const opt = document.createElement("option");
+    opt.value = fallback;
+    opt.textContent = `${fallback} (not pulled)`;
+    opt.selected = true;
+    select.appendChild(opt);
+  }
+  updatePolishCloudHint();
 }
 
 async function ensurePolishModel(model) {
+  if (String(model || "").endsWith("-cloud")) {
+    if (ollamaCloudKeyMissing) {
+      throw new Error(`Set ${ollamaCloudKeyEnv} env var`);
+    }
+    return true;
+  }
   const listResponse = await fetch("/api/ollama/models");
   const listPayload = await listResponse.json();
+  ollamaCloudKeyEnv = listPayload.cloud_key_env || ollamaCloudKeyEnv;
+  ollamaCloudKeyMissing = Boolean(listPayload.cloud_key_missing);
   if (listResponse.ok && listPayload.ok && Array.isArray(listPayload.models) && listPayload.models.includes(model)) {
     return true;
   }
@@ -340,6 +443,10 @@ async function runPolish() {
     $("polishHint").textContent = "Нет текста для обработки";
     return;
   }
+  if (model.endsWith("-cloud") && ollamaCloudKeyMissing) {
+    $("polishHint").textContent = `Set ${ollamaCloudKeyEnv} env var`;
+    return;
+  }
   if (preset === "custom" && !instruction) {
     $("polishHint").textContent = "Для custom заполните инструкцию";
     return;
@@ -377,7 +484,12 @@ async function runPolish() {
   }
 
   polishLastResult = data.polished_text || "";
-  $("polishModalResult").innerHTML = `<pre>${escapeHtml(formatReadableText(polishLastResult))}</pre>`;
+  if (preset === "obsidian") {
+    polishLastResult = normalizePolishMarkdown(polishLastResult);
+    $("polishModalResult").innerHTML = `<div class="md-render">${safeMarkedParse(polishLastResult)}</div>`;
+  } else {
+    $("polishModalResult").innerHTML = `<pre>${escapeHtml(polishLastResult)}</pre>`;
+  }
   $("polishHint").textContent = "Готово. Нажмите 'Вставить в Live text'.";
 }
 
@@ -574,6 +686,34 @@ function setDictState(text) {
   $("dictState").textContent = `State: ${text}`;
 }
 
+function setDictRecordingUi(mode) {
+  const startBtn = $("dictStart");
+  if (!startBtn) return;
+  startBtn.classList.remove("recording", "stopping", "error");
+
+  if (mode === "recording") {
+    startBtn.classList.add("recording");
+    startBtn.textContent = "СТОП";
+    startBtn.disabled = false;
+    return;
+  }
+  if (mode === "stopping") {
+    startBtn.classList.add("stopping");
+    startBtn.textContent = "СТОП...";
+    startBtn.disabled = true;
+    return;
+  }
+  if (mode === "error") {
+    startBtn.classList.add("error");
+    startBtn.textContent = "СТАРТ";
+    startBtn.disabled = false;
+    return;
+  }
+
+  startBtn.textContent = "СТАРТ";
+  startBtn.disabled = false;
+}
+
 function setDictHint(text) {
   $("dictHint").textContent = text || "";
 }
@@ -612,15 +752,28 @@ function setupDictationWsHandlers() {
       setDictHint(payload.message || "");
     } else if (t === "state") {
       setDictState(payload.state || "idle");
+      if (payload.state === "recording") {
+        setDictRecordingUi("recording");
+      } else if (payload.state === "stopping") {
+        setDictRecordingUi("stopping");
+      } else if (payload.state === "error") {
+        setDictRecordingUi("error");
+      } else {
+        setDictRecordingUi("idle");
+      }
     } else if (t === "started") {
       setDictState("listening");
       $("dictModel").textContent = `Model: ${payload.model || "-"}`;
       $("dictDevice").textContent = `Device: ${payload.device || "-"}`;
       setDictHint(`Listening... profile=${payload.profile}`);
+      setDictRecordingUi("recording");
     } else if (t === "partial") {
       setDictHint("Transcribing...");
     } else if (t === "final") {
-      $("dictLiveText").value = formatReadableText(payload.text || "");
+      const incoming = String(payload.text || "");
+      $("dictLiveText").value = looksLikeMarkdown(incoming)
+        ? incoming.replace(/\r\n/g, "\n")
+        : formatReadableText(incoming);
       updateMarkdownPreviewFromLive();
     } else if (t === "stats") {
       $("dictRtf").textContent = `RTF: ${payload.rtf ?? "-"}`;
@@ -633,15 +786,18 @@ function setupDictationWsHandlers() {
     } else if (t === "stopped") {
       setDictState("stopped");
       setDictHint("Stopped");
+      setDictRecordingUi("idle");
     } else if (t === "error") {
       setDictHint(payload.message || "dictation error");
       setDictState("error");
+      setDictRecordingUi("error");
     }
   };
 
   dictWs.onclose = () => {
     dictRunning = false;
     setDictState("disconnected");
+    setDictRecordingUi("idle");
   };
 }
 
@@ -650,6 +806,7 @@ async function startDictation() {
   const mimeType = pickDictationMimeType();
   if (!mimeType) {
     setDictHint("Browser does not support Opus MediaRecorder mimeType.");
+    setDictRecordingUi("error");
     return;
   }
   hideDictDownloads();
@@ -659,6 +816,7 @@ async function startDictation() {
     dictStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     setDictHint(`Microphone error: ${err}`);
+    setDictRecordingUi("error");
     return;
   }
 
@@ -675,6 +833,7 @@ async function startDictation() {
   };
   dictRecorder.onerror = () => {
     setDictHint("Recorder error");
+    setDictRecordingUi("error");
   };
 
   const waitOpen = new Promise((resolve, reject) => {
@@ -694,6 +853,7 @@ async function startDictation() {
   } catch (err) {
     setDictHint(`WS error: ${err}`);
     stopDictationCapture();
+    setDictRecordingUi("error");
     return;
   }
 
@@ -708,6 +868,7 @@ async function startDictation() {
   dictRecorder.start(320);
   dictRunning = true;
   setDictState("listening");
+  setDictRecordingUi("recording");
 }
 
 function stopDictation() {
@@ -716,6 +877,15 @@ function stopDictation() {
   stopDictationCapture();
   wsSendJson({ type: "stop" });
   setDictState("stopping");
+  setDictRecordingUi("stopping");
+}
+
+function toggleDictation() {
+  if (dictRunning) {
+    stopDictation();
+  } else {
+    startDictation();
+  }
 }
 
 function clearDictation() {
@@ -723,6 +893,7 @@ function clearDictation() {
   updateMarkdownPreviewFromLive();
   setDictHint("");
   setDictState("idle");
+  setDictRecordingUi("idle");
   hideDictDownloads();
   wsSendJson({ type: "clear" });
 }
@@ -967,8 +1138,7 @@ function initControls() {
   $("tabBtnTranscribe").addEventListener("click", () => switchTab("transcribe"));
   $("tabBtnDictation").addEventListener("click", () => switchTab("dictation"));
 
-  $("dictStart").addEventListener("click", startDictation);
-  $("dictStop").addEventListener("click", stopDictation);
+  $("dictStart").addEventListener("click", toggleDictation);
   $("dictClear").addEventListener("click", clearDictation);
   $("dictSave").addEventListener("click", saveDictation);
   $("dictCopy").addEventListener("click", copyDictationText);
@@ -993,12 +1163,8 @@ function initControls() {
   });
   $("polishRun").addEventListener("click", runPolish);
   $("polishApply").addEventListener("click", applyPolishToLiveText);
-  $("polishPreset").addEventListener("change", () => {
-    const isCustom = $("polishPreset").value === "custom";
-    $("polishInstruction").placeholder = isCustom
-      ? "Опишите свою команду"
-      : "Доп. уточнение (необязательно)";
-  });
+  $("polishPreset").addEventListener("change", updatePolishInstructionPlaceholder);
+  $("polishModel").addEventListener("change", updatePolishCloudHint);
   $("dictHistory").addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -1079,6 +1245,7 @@ function init() {
   loadTranscriptionHistory();
   switchTab("transcribe");
   hideDictDownloads();
+  setDictRecordingUi("idle");
   setTimeline("queued");
   setMdTab(localStorage.getItem(MD_TAB_KEY) || "source");
   updateMarkdownPreviewFromLive();

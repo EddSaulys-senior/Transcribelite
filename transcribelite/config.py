@@ -53,7 +53,11 @@ DEFAULT_CONFIG = {
     },
     "summarize": {
         "enabled": "true",
+        "ollama_mode": "auto",
         "ollama_url": "http://127.0.0.1:11434",
+        "ollama_url_local": "http://127.0.0.1:11434",
+        "ollama_url_cloud": "https://ollama.com",
+        "ollama_api_key_env": "OLLAMA_API_KEY",
         "model": "llama3.1:8b",
         "prompt_template": "prompts/meeting_ru.txt",
         "timeout_s": "120",
@@ -106,6 +110,10 @@ class SttConfig:
 class SummarizeConfig:
     enabled: bool
     ollama_url: str
+    ollama_mode: str
+    ollama_url_local: str
+    ollama_url_cloud: str
+    ollama_api_key_env: str
     model: str
     prompt_template: Path
     timeout_s: int
@@ -240,9 +248,28 @@ def load_config(config_path: str | None = None, init_if_missing: bool = True) ->
     )
 
     summarize_prompt = resolve_path(base_dir, parser.get("summarize", "prompt_template"))
+    ollama_mode = parser.get("summarize", "ollama_mode", fallback="auto").strip().lower()
+    if ollama_mode not in {"local", "cloud", "auto"}:
+        ollama_mode = "auto"
     summarize = SummarizeConfig(
         enabled=parser.getboolean("summarize", "enabled"),
         ollama_url=parser.get("summarize", "ollama_url").rstrip("/"),
+        ollama_mode=ollama_mode,
+        ollama_url_local=parser.get(
+            "summarize",
+            "ollama_url_local",
+            fallback=parser.get("summarize", "ollama_url", fallback="http://127.0.0.1:11434"),
+        ).rstrip("/"),
+        ollama_url_cloud=parser.get(
+            "summarize",
+            "ollama_url_cloud",
+            fallback=parser.get("summarize", "ollama_url", fallback="https://ollama.com"),
+        ).rstrip("/"),
+        ollama_api_key_env=parser.get(
+            "summarize",
+            "ollama_api_key_env",
+            fallback="OLLAMA_API_KEY",
+        ).strip(),
         model=parser.get("summarize", "model"),
         prompt_template=summarize_prompt,
         timeout_s=parser.getint("summarize", "timeout_s"),

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.4 - 2026-02-13
+
+- Fixed Ollama fallback for `POST /api/polish` in `ollama_mode=auto`:
+  - if model is not found in local Ollama, backend now retries in cloud
+  - applies to any model name (not only names ending with `-cloud`)
+- Updated `README.md`:
+  - documented `summarize` config keys (`ollama_mode`, `ollama_url_local`, `ollama_url_cloud`, `ollama_api_key_env`)
+  - clarified `auto` behavior (`local -> cloud` fallback on `model not found`)
+
 ## 0.11.3 - 2026-02-12
 
 - Added generated `title` for each job:

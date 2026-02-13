@@ -12,7 +12,7 @@
 
 - CLI и Web интерфейс
 - GPU-распознавание через `faster-whisper` (CUDA при наличии)
-- Локальное summary только через Ollama (без облачных API)
+- Summary/Polish через Ollama: local, cloud или auto
 - Профили качества: `auto`, `fast`, `balanced`, `quality`
 - Запуск в online/offline/portable режимах
 - В Web: загрузка файла или запуск по ссылке из интернета (например YouTube) через `yt-dlp`
@@ -36,7 +36,7 @@ TranscribeLite/
 │  ├─ pipeline/
 │  │  ├─ ingest.py               # ffmpeg -> wav 16k mono
 │  │  ├─ stt_faster_whisper.py   # STT (GPU/CPU, faster-whisper)
-│  │  ├─ summarize_ollama.py     # Локальный summary (Ollama)
+│  │  ├─ summarize_ollama.py     # Summary/Polish через Ollama (local/cloud/auto)
 │  │  └─ export.py               # Экспорт transcript/note/json
 │  └─ utils/                     # paths/logging/http/chunking/helpers
 ├─ web/
@@ -67,7 +67,7 @@ TranscribeLite/
 | `[stt]` | `model_name`, `device`, `compute_type`, `beam_size`, `vad_filter`, `language` | Транскрибация через faster-whisper |
 | `[profile]` | `active` | Активный профиль: `auto/fast/balanced/quality` |
 | `[profile_auto]` | `short_max_minutes`, `medium_max_minutes`, `short_profile`, `medium_profile`, `long_profile` | Автовыбор профиля по длительности |
-| `[summarize]` | `enabled`, `ollama_url`, `model`, `timeout_s`, `max_chars` | Локальное summary через Ollama |
+| `[summarize]` | `enabled`, `ollama_mode`, `ollama_url_local`, `ollama_url_cloud`, `ollama_api_key_env`, `model`, `timeout_s`, `max_chars` | Summary/Polish через Ollama (local/cloud/auto) |
 | `[export]` | `save_txt`, `save_json`, `save_md`, `include_timestamps` | Формат и состав экспортируемых файлов |
 | `[dictation]` | `hotkey`, `profile`, `language`, `summarize`, `auto_save` | Настройки вкладки диктовки и hotkey-режима |
 
@@ -133,6 +133,7 @@ TranscribeLite/
   - строгий режим (`strict mode`)
   - выбор модели Ollama
   - автодозагрузка модели с индикатором статуса, если модель ещё не скачана
+  - в `ollama_mode=auto`: если модель не найдена локально, выполняется fallback в cloud
   - результат показывается в модалке и по кнопке `Вставить в Live text` заменяет текст диктовки
   - поле `Live text` редактируемое, можно вручную править перед сохранением
 
@@ -259,7 +260,8 @@ long_profile = fast
 
 ## Важно
 
-- Summary работает только локально через Ollama.
+- В `ollama_mode=auto` запросы идут в local Ollama; при `model not found` выполняется fallback в cloud.
+- Для cloud режима нужен API-ключ в переменной окружения из `summarize.ollama_api_key_env` (по умолчанию `OLLAMA_API_KEY`).
 - Если Ollama недоступна, транскрипция не падает: summary пропускается.
 - Для URL-источников используйте только контент, который вам разрешено обрабатывать.
 

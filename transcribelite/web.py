@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -22,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from transcribelite.config import load_config
 from transcribelite.pipeline.export import export_outputs
 from transcribelite.pipeline.summarize_ollama import check_ollama_health, ensure_model_available, generate_text
-from transcribelite.pipeline.summarize_ollama import list_ollama_models
+from transcribelite.pipeline.summarize_ollama import list_ollama_models_detailed
 from transcribelite.pipeline.summarize_ollama import summarize_text
 from transcribelite.search_index import add_dictation_history
 from transcribelite.search_index import add_qa_history
@@ -69,15 +70,16 @@ ALLOWED_EXTENSIONS = {
     ".webm",
 }
 ALLOWED_PROFILES = {"auto", "fast", "balanced", "quality"}
-ALLOWED_POLISH_PRESETS = {"punct", "clean", "short", "task", "obsidian", "custom"}
-POLISH_PRESET_FILES = {
-    "punct": "punct_ru.txt",
-    "clean": "clean_ru.txt",
-    "short": "short_ru.txt",
-    "task": "task_ru.txt",
-    "obsidian": "obsidian_ru.txt",
-    "custom": "custom_ru.txt",
+POLISH_PRESET_TITLES = {
+    "punct": "punct - пунктуация и ошибки",
+    "clean": "clean - убрать повторы/паразиты",
+    "short": "short - сжать в 5-7 строк",
+    "task": "task - 1-3 задачи",
+    "obsidian": "obsidian - заметка Markdown",
+    "markdown": "markdown - формат Markdown",
+    "custom": "custom - своя команда",
 }
+POLISH_PRESET_ORDER = ["punct", "clean", "short", "task", "obsidian", "markdown", "custom"]
 POLISH_NUM_PREDICT = {
     "punct": 350,
     "clean": 350,
@@ -335,6 +337,13 @@ def _to_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _ollama_error_status(message: str) -> int:
+    text = str(message or "").lower()
+    if "нужен ключ" in text:
+        return 400
+    return 503
+
+
 def _read_prompt_file(path: Path) -> str:
     if not path.exists():
         raise HTTPException(status_code=500, detail=f"Missing prompt file: {path}")
@@ -346,8 +355,45 @@ def _read_prompt_file(path: Path) -> str:
     raise HTTPException(status_code=500, detail=f"Unable to read prompt file: {path}")
 
 
+def _discover_polish_preset_files() -> dict[str, Path]:
+    presets: dict[str, Path] = {}
+    if not POLISH_PROMPTS_DIR.exists():
+        return presets
+
+    for path in POLISH_PROMPTS_DIR.glob("*.txt"):
+        name = path.stem.strip().lower()
+        if name == "base_strict_ru":
+            continue
+        preset = name[:-3] if name.endswith("_ru") else name
+        preset = re.sub(r"[^a-z0-9_-]+", "", preset)
+        if not preset:
+            continue
+        presets[preset] = path
+    return presets
+
+
+def _build_polish_presets_payload() -> list[dict[str, Any]]:
+    discovered = _discover_polish_preset_files()
+    ordered_ids = [p for p in POLISH_PRESET_ORDER if p in discovered]
+    extra_ids = sorted([p for p in discovered.keys() if p not in ordered_ids])
+    all_ids = ordered_ids + extra_ids
+
+    result: list[dict[str, Any]] = []
+    for preset_id in all_ids:
+        result.append(
+            {
+                "id": preset_id,
+                "title": POLISH_PRESET_TITLES.get(preset_id, preset_id),
+                "requires_instruction": preset_id == "custom",
+                "is_markdown": preset_id in {"obsidian", "markdown"},
+            }
+        )
+    return result
+
+
 def _build_polish_prompt(
     preset: str,
+    preset_path: Path,
     text: str,
     instruction: str,
     strict: bool,
@@ -355,8 +401,7 @@ def _build_polish_prompt(
     parts: list[str] = []
     if strict:
         parts.append(_read_prompt_file(POLISH_PROMPTS_DIR / "base_strict_ru.txt").strip())
-    preset_file = POLISH_PRESET_FILES[preset]
-    preset_template = _read_prompt_file(POLISH_PROMPTS_DIR / preset_file)
+    preset_template = _read_prompt_file(preset_path)
     if preset == "custom":
         preset_block = preset_template.format(instruction=instruction or "Улучши читаемость текста.")
     else:
@@ -373,7 +418,7 @@ def _build_polish_prompt(
 
 
 def _polish_is_markdown(preset: str, polished_text: str) -> bool:
-    if preset == "obsidian":
+    if preset in {"obsidian", "markdown"}:
         return True
     stripped = polished_text.lstrip()
     return stripped.startswith("#") or stripped.startswith("##")
@@ -662,6 +707,47 @@ def _normalize_for_compare(text: str) -> str:
     return normalized
 
 
+def _delta_from_previous_chunk(previous_chunk: str, current_chunk: str, max_overlap_words: int = 60) -> str:
+    prev_words = previous_chunk.split()
+    curr_words = current_chunk.split()
+    if not curr_words:
+        return ""
+    if not prev_words:
+        return current_chunk.strip()
+
+    prev_norm = _normalize_for_compare(previous_chunk)
+    curr_norm = _normalize_for_compare(current_chunk)
+    if not curr_norm:
+        return ""
+    if prev_norm == curr_norm:
+        return ""
+
+    # Same fragment with minor punctuation/case changes: do not append duplicates.
+    sim = difflib.SequenceMatcher(None, prev_norm, curr_norm).ratio()
+    if sim >= 0.92:
+        return ""
+
+    prev_norm_words = prev_norm.split()
+    curr_norm_words = curr_norm.split()
+    max_k = min(max_overlap_words, len(prev_norm_words), len(curr_norm_words))
+    overlap = 0
+    for k in range(max_k, 0, -1):
+        if prev_norm_words[-k:] == curr_norm_words[:k]:
+            overlap = k
+            break
+
+    if overlap > 0:
+        delta_words = curr_words[overlap:]
+        return " ".join(delta_words).strip()
+
+    # If there is no clear overlap but the new chunk contains the old one, treat as refinement.
+    if prev_norm and prev_norm in curr_norm:
+        return ""
+    if sim >= 0.70:
+        return ""
+    return current_chunk.strip()
+
+
 def _build_dictation_preview(text: str, max_chars: int = 420) -> str:
     compact = re.sub(r"\s+", " ", text.strip())
     if not compact:
@@ -715,10 +801,12 @@ async def _dictation_step(websocket: WebSocket, session: DictationSession) -> No
         if chunk_text:
             if _normalize_for_compare(chunk_text) == _normalize_for_compare(session.last_chunk_text):
                 return
+            delta_text = _delta_from_previous_chunk(session.last_chunk_text, chunk_text)
             session.last_chunk_text = chunk_text
-            session.final_text = _merge_by_overlap_words(session.final_text, chunk_text)
-            await websocket.send_json({"type": "partial", "text": chunk_text})
-            await websocket.send_json({"type": "final", "text": session.final_text})
+            if delta_text:
+                session.final_text = (session.final_text + " " + delta_text).strip()
+                await websocket.send_json({"type": "partial", "text": delta_text})
+                await websocket.send_json({"type": "final", "text": session.final_text})
         dt = max(0.001, datetime.now().timestamp() - t0)
         await websocket.send_json({"type": "stats", "rtf": round(dt / 10.0, 3), "seconds": 10})
     except Exception as exc:
@@ -1003,7 +1091,10 @@ async def ask_recording(
     cfg = load_config("config.ini", init_if_missing=True)
     healthy, reason = check_ollama_health(cfg)
     if not healthy:
-        raise HTTPException(status_code=503, detail=f"Ollama недоступна: {reason}")
+        raise HTTPException(
+            status_code=_ollama_error_status(reason),
+            detail=f"Ollama недоступна: {reason}",
+        )
 
     try:
         answer = await asyncio.to_thread(
@@ -1015,7 +1106,10 @@ async def ask_recording(
             0.2,
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Ollama недоступна: {exc}") from exc
+        raise HTTPException(
+            status_code=_ollama_error_status(str(exc)),
+            detail=f"Ollama недоступна: {exc}",
+        ) from exc
 
     response_sources = [
         {"number": i + 1, "chunk_id": hit.chunk_id, "text": _short_source_text(hit.text)}
@@ -1170,20 +1264,35 @@ def delete_dictation_history(item_id: int) -> JSONResponse:
 @app.get("/api/ollama/models")
 def get_ollama_models() -> JSONResponse:
     cfg = load_config("config.ini", init_if_missing=True)
-    healthy, reason = check_ollama_health(cfg)
-    if not healthy:
-        return JSONResponse(
-            {"ok": False, "error": f"Ollama недоступна: {reason}", "models": [], "default_model": cfg.summarize.model},
-            status_code=503,
-        )
     try:
-        models = list_ollama_models(cfg)
+        items = list_ollama_models_detailed(cfg)
+        models = [str(item.get("name") or "").strip() for item in items if str(item.get("name") or "").strip()]
     except Exception as exc:
+        status_code = _ollama_error_status(str(exc))
         return JSONResponse(
-            {"ok": False, "error": f"Не удалось получить список моделей: {exc}", "models": [], "default_model": cfg.summarize.model},
-            status_code=503,
+            {
+                "ok": False,
+                "error": f"Не удалось получить список моделей: {exc}",
+                "models": [],
+                "items": [],
+                "default_model": cfg.summarize.model,
+                "ollama_mode": cfg.summarize.ollama_mode,
+                "cloud_key_env": cfg.summarize.ollama_api_key_env,
+                "cloud_key_missing": not bool(os.environ.get(cfg.summarize.ollama_api_key_env, "").strip()),
+            },
+            status_code=status_code,
         )
-    return JSONResponse({"ok": True, "models": models, "default_model": cfg.summarize.model})
+    return JSONResponse(
+        {
+            "ok": True,
+            "models": models,
+            "items": items,
+            "default_model": cfg.summarize.model,
+            "ollama_mode": cfg.summarize.ollama_mode,
+            "cloud_key_env": cfg.summarize.ollama_api_key_env,
+            "cloud_key_missing": not bool(os.environ.get(cfg.summarize.ollama_api_key_env, "").strip()),
+        }
+    )
 
 
 @app.post("/api/ollama/pull/start")
@@ -1231,6 +1340,11 @@ def get_ollama_pull_status(pull_id: str) -> JSONResponse:
     return JSONResponse(asdict(state))
 
 
+@app.get("/api/polish/presets")
+def get_polish_presets() -> JSONResponse:
+    return JSONResponse({"ok": True, "items": _build_polish_presets_payload()})
+
+
 @app.post("/api/polish")
 async def polish_text(request: Request) -> JSONResponse:
     payload = await _read_polish_payload(request)
@@ -1242,7 +1356,9 @@ async def polish_text(request: Request) -> JSONResponse:
     save_as_file = _to_bool(payload.get("save_as_file"), False)
     model_override = str(payload.get("ollama_model") or "").strip()
 
-    if preset not in ALLOWED_POLISH_PRESETS:
+    preset_files = _discover_polish_preset_files()
+    preset_path = preset_files.get(preset)
+    if preset_path is None:
         raise HTTPException(status_code=400, detail=f"Unsupported preset: {preset}")
     if not source_text:
         raise HTTPException(status_code=400, detail="Text is empty")
@@ -1254,12 +1370,19 @@ async def polish_text(request: Request) -> JSONResponse:
         cfg.summarize.model = model_override
     healthy, reason = check_ollama_health(cfg)
     if not healthy:
+        status_code = _ollama_error_status(reason)
         return JSONResponse(
             {"ok": False, "error": f"Ollama недоступна: {reason}", "polished_text": "", "saved_path": None, "format": "text"},
-            status_code=503,
+            status_code=status_code,
         )
 
-    prompt = _build_polish_prompt(preset=preset, text=source_text, instruction=instruction, strict=strict)
+    prompt = _build_polish_prompt(
+        preset=preset,
+        preset_path=preset_path,
+        text=source_text,
+        instruction=instruction,
+        strict=strict,
+    )
     num_predict = POLISH_NUM_PREDICT.get(preset, 350)
 
     try:
@@ -1273,9 +1396,10 @@ async def polish_text(request: Request) -> JSONResponse:
             0.9,
         )
     except Exception as exc:
+        status_code = _ollama_error_status(str(exc))
         return JSONResponse(
             {"ok": False, "error": f"Ollama недоступна: {exc}", "polished_text": "", "saved_path": None, "format": "text"},
-            status_code=503,
+            status_code=status_code,
         )
 
     saved_path: Optional[str] = None
