@@ -3,6 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0\.."
 
 set "DIST_ROOT=portable_dist\TranscribeLite-Portable"
+if not "%PORTABLE_DIST_ROOT%"=="" set "DIST_ROOT=%PORTABLE_DIST_ROOT%"
 set "DIST_TMP=portable_dist\_portable_build_tmp"
 set "PY_SRC=C:\Python311"
 if not "%PORTABLE_PYTHON_SRC%"=="" set "PY_SRC=%PORTABLE_PYTHON_SRC%"
@@ -117,22 +118,60 @@ echo Writing portable launchers...
   echo TranscribeLite Portable
   echo =======================
   echo.
-  echo 1^) On target PC, unpack the folder as-is.
-  echo 2^) Optional for summaries: install Ollama and pull a model ^(for example: llama3.1:8b^).
-  echo 3^) Check environment:
+  echo QUICK START
+  echo -----------
+  echo 1^) Unpack this folder on the target PC.
+  echo 2^) Run environment check:
   echo    doctor_portable.bat
-  echo 4^) CLI transcription:
+  echo 3^) Run transcription from CLI:
   echo    run_portable.bat ^<file_or_folder^>
-  echo 5^) Web UI:
+  echo 4^) Or run Web UI:
   echo    run_web.bat
   echo    then open http://127.0.0.1:7860
-  echo 6^) Global hotkey dictation:
+  echo 5^) Optional global hotkey dictation:
   echo    run_hotkey.bat
   echo.
-  echo Notes:
-  echo - Models are stored in models\
-  echo - Results are stored in output\
-  echo - Logs are stored in logs\
+  echo WHISPER MODELS ^(models\ folder^)
+  echo -------------------------------
+  echo Online PC:
+  echo - Models are downloaded automatically on first run.
+  echo Offline PC:
+  echo - Copy pre-downloaded model folders into models\ from another machine.
+  echo.
+  echo OLLAMA SUMMARY MODELS
+  echo ---------------------
+  echo - Summary/QA polish requires local Ollama.
+  echo - Install Ollama and pull model, for example:
+  echo   ollama pull llama3.1:8b
+  echo - If Ollama is unavailable, transcription still works, only summary is skipped.
+  echo.
+  echo HUGGING FACE TOKENS ^(only for gated/private models, e.g. pyannote^)
+  echo --------------------------------------------------------------------
+  echo 1^) Login: https://huggingface.co/login
+  echo 2^) Create token ^(Read role^): https://huggingface.co/settings/tokens
+  echo 3^) In cmd for current session:
+  echo    set HF_TOKEN=hf_your_token_here
+  echo 4^) To save permanently:
+  echo    setx HF_TOKEN "hf_your_token_here"
+  echo.
+  echo PYANNOTE ACCESS CONFIRMATION PAGES
+  echo ----------------------------------
+  echo - https://huggingface.co/pyannote/segmentation-3.0
+  echo - https://huggingface.co/pyannote/speaker-diarization-3.1
+  echo On each page click access/agree buttons to accept repository terms.
+  echo.
+  echo IMPORTANT PATHS
+  echo ---------------
+  echo - models\      : Whisper models cache
+  echo - output\      : Exported results
+  echo - logs\        : Application logs
+  echo - config.ini   : Main portable configuration
+  echo.
+  echo TROUBLESHOOTING
+  echo ---------------
+  echo - ffmpeg FAIL in doctor: ensure ffmpeg\ffmpeg.exe exists.
+  echo - torch.cuda FAIL: GPU may be unavailable; CPU fallback is used.
+  echo - "No module named ...": rebuild portable from machine with valid .venv.
 ) > "%DIST_TMP%\README_PORTABLE.txt"
 
 move "%DIST_TMP%" "%DIST_ROOT%" >nul

@@ -49,7 +49,7 @@
 
 ## 0.11.0 - 2026-02-12
 
-- Added new Polish Text flow (`✨ Привести в порядок`) in dictation tab (`Live text`).
+- Added new Polish Text flow (`✨ AI Привести в порядок`) in dictation tab (`Live text`).
 - Added backend endpoint: `POST /api/polish` (Ollama-only).
   - presets: `punct`, `clean`, `short`, `task`, `obsidian`, `custom`
   - supports `strict`, custom instruction, model override
